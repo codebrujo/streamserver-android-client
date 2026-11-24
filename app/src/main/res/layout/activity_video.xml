@@ -34,7 +34,15 @@
             android:background="@color/overlay"
             android:gravity="center_vertical"
             android:orientation="horizontal"
-            android:padding="12dp">
+            android:padding="4dp">
+
+            <ImageButton
+                android:id="@+id/streamBack"
+                android:layout_width="48dp"
+                android:layout_height="48dp"
+                android:background="?attr/selectableItemBackgroundBorderless"
+                android:contentDescription="Back"
+                android:src="@drawable/ic_back" />
 
             <TextView
                 android:id="@+id/streamTitle"
@@ -109,17 +117,36 @@
         </LinearLayout>
     </LinearLayout>
 
-    <TextView
-        android:id="@+id/info"
+    <!-- top bar of the built-in controller (direct mode): back + file info -->
+    <LinearLayout
+        android:id="@+id/infoBar"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:layout_gravity="top"
         android:background="@color/overlay"
-        android:maxLines="3"
-        android:padding="12dp"
-        android:textColor="@color/text"
-        android:textSize="14sp"
-        android:visibility="gone" />
+        android:gravity="center_vertical"
+        android:orientation="horizontal"
+        android:padding="4dp"
+        android:visibility="gone">
+
+        <ImageButton
+            android:id="@+id/back"
+            android:layout_width="48dp"
+            android:layout_height="48dp"
+            android:background="?attr/selectableItemBackgroundBorderless"
+            android:contentDescription="Back"
+            android:src="@drawable/ic_back" />
+
+        <TextView
+            android:id="@+id/info"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="4dp"
+            android:layout_weight="1"
+            android:maxLines="3"
+            android:textColor="@color/text"
+            android:textSize="14sp" />
+    </LinearLayout>
 
     <TextView
         android:id="@+id/badge"
