@@ -53,6 +53,14 @@
                 android:ellipsize="end"
                 android:textColor="@color/text"
                 android:textSize="14sp" />
+
+            <ImageButton
+                android:id="@+id/streamNext"
+                android:layout_width="48dp"
+                android:layout_height="48dp"
+                android:background="?attr/selectableItemBackgroundBorderless"
+                android:contentDescription="Next file"
+                android:src="@drawable/ic_next" />
         </LinearLayout>
 
         <FrameLayout
@@ -146,6 +154,14 @@
             android:maxLines="3"
             android:textColor="@color/text"
             android:textSize="14sp" />
+
+        <ImageButton
+            android:id="@+id/next"
+            android:layout_width="48dp"
+            android:layout_height="48dp"
+            android:background="?attr/selectableItemBackgroundBorderless"
+            android:contentDescription="Next file"
+            android:src="@drawable/ic_next" />
 
         <Button
             android:id="@+id/toServer"
