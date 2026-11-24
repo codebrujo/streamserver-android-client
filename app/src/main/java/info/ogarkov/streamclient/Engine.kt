@@ -60,6 +60,10 @@ object Engine {
     lateinit var dataSourceFactory: OkHttpDataSource.Factory
         private set
 
+    /** [player] with fade-out on pause: give this to the UI and the media session */
+    lateinit var control: FadingPlayer
+        private set
+
     /** true while the playlist holds music tracks (false: a video or nothing) */
     @Volatile var audioMode = false
         private set
@@ -94,6 +98,7 @@ object Engine {
             .setWakeMode(C.WAKE_MODE_NETWORK)
             .build()
         player.addListener(listener)
+        control = FadingPlayer(player)
         main.postDelayed(tick, 5000)
     }
 
@@ -136,7 +141,7 @@ object Engine {
         appending = false
         player.setMediaItems(tracks.map { item(it) }, index.coerceIn(0, tracks.size - 1), (startSec * 1000).toLong())
         player.prepare()
-        player.play()
+        control.play()
     }
 
     /** Start playing at the track with [trackId] in [folder] (or the first track of [file]). */
@@ -153,7 +158,7 @@ object Engine {
     }
 
     fun stopAll() {
-        player.stop()
+        control.stop()
         player.clearMediaItems()
         audioMode = false
         bump()
@@ -163,7 +168,7 @@ object Engine {
     fun startVideo() {
         if (audioMode) saveAudioPosition()
         audioMode = false
-        player.stop()
+        control.stop()
         player.clearMediaItems()
         bump()
     }
@@ -207,7 +212,7 @@ object Engine {
                     if (wasEnded) {
                         player.seekTo(first, 0)
                         player.prepare()
-                        player.play()
+                        control.play()
                     }
                     break
                 }
@@ -251,14 +256,14 @@ object Engine {
                 Conn.recheck()
                 main.postDelayed({
                     player.prepare()
-                    player.play()
+                    control.play()
                 }, 3000)
             } else if (player.hasNextMediaItem()) {
                 // a broken file: go on with the next one
                 errorRetries = 0
                 player.seekToNextMediaItem()
                 player.prepare()
-                player.play()
+                control.play()
             }
             bump()
         }
@@ -276,7 +281,7 @@ class PlaybackService : MediaSessionService() {
             this, 0, Intent(this, NowPlayingActivity::class.java),
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
         )
-        session = MediaSession.Builder(this, Engine.player)
+        session = MediaSession.Builder(this, Engine.control)
             .setSessionActivity(open)
             // album covers come from the server: load them with the app's own HTTP client
             .setBitmapLoader(DataSourceBitmapLoader(MoreExecutors.listeningDecorator(Executors.newSingleThreadExecutor()), Engine.dataSourceFactory))

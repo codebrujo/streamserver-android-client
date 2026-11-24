@@ -146,6 +146,14 @@
             android:maxLines="3"
             android:textColor="@color/text"
             android:textSize="14sp" />
+
+        <Button
+            android:id="@+id/toServer"
+            style="?attr/borderlessButtonStyle"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Convert on server"
+            android:textColor="@color/accent" />
     </LinearLayout>
 
     <TextView
