@@ -125,6 +125,8 @@ class VideoActivity : AppCompatActivity() {
         infoText = findViewById(R.id.info)
         findViewById<ImageButton>(R.id.back).setOnClickListener { finish() }
         findViewById<ImageButton>(R.id.streamBack).setOnClickListener { finish() }
+        findViewById<ImageButton>(R.id.next).setOnClickListener { skipToNext() }
+        findViewById<ImageButton>(R.id.streamNext).setOnClickListener { skipToNext() }
         // manual way out when the phone shows a broken / black picture
         findViewById<Button>(R.id.toServer).setOnClickListener {
             if (mode == Mode.DIRECT) switchToStream(positionSec())
@@ -295,6 +297,10 @@ class VideoActivity : AppCompatActivity() {
         val text = infoText()
         infoText.text = text
         streamTitle.text = text
+        val hasNext = video?.let { Library.nextVideo(it.id) } != null
+        val vis = if (hasNext) View.VISIBLE else View.GONE
+        findViewById<View>(R.id.next).visibility = vis
+        findViewById<View>(R.id.streamNext).visibility = vis
     }
 
     // ---------- direct playback ----------
@@ -593,6 +599,21 @@ class VideoActivity : AppCompatActivity() {
         badge.visibility = View.VISIBLE
         handler.removeCallbacks(hideBadge)
         handler.postDelayed(hideBadge, 5000)
+    }
+
+    /** "Next" button: the next file of the folder (after the last one: the next folder). */
+    private fun skipToNext() {
+        val v = video ?: return
+        val next = Library.nextVideo(v.id)
+        if (next == null) {
+            Toast.makeText(this, "This is the last video", Toast.LENGTH_SHORT).show()
+            return
+        }
+        savePosition() // keep where this one stopped in "Recently played"
+        Toast.makeText(this, "Next: ${next.file}", Toast.LENGTH_SHORT).show()
+        directRetries = 0
+        streamRetries = 0
+        open(next.id)
     }
 
     /** Continuous playback: the next video of the tree, folder after folder. */
