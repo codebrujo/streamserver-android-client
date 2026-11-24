@@ -103,7 +103,7 @@ class MainActivity : AppCompatActivity() {
             override fun afterTextChanged(s: Editable?) = render()
         })
         mini.setOnClickListener { startActivity(Intent(this, NowPlayingActivity::class.java)) }
-        miniPlay.setOnClickListener { val p = Engine.player; if (p.isPlaying) p.pause() else p.play() }
+        miniPlay.setOnClickListener { val p = Engine.control; if (p.playWhenReady) p.pause() else p.play() }
         findViewById<ImageButton>(R.id.miniNext).setOnClickListener { Engine.player.seekToNextMediaItem() }
 
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
@@ -319,7 +319,7 @@ class MainActivity : AppCompatActivity() {
         mini.visibility = View.VISIBLE
         miniTitle.text = t.title
         miniSub.text = listOf(t.artist, t.album).filter { it.isNotBlank() }.joinToString(" — ")
-        miniPlay.setImageResource(if (Engine.player.playWhenReady) R.drawable.ic_pause else R.drawable.ic_play)
+        miniPlay.setImageResource(if (Engine.control.playWhenReady) R.drawable.ic_pause else R.drawable.ic_play)
         if (miniFolder != t.folder) {
             miniFolder = t.folder
             miniCover.setImageResource(R.drawable.ic_album)

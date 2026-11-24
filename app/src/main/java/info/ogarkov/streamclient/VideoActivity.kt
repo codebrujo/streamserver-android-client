@@ -46,6 +46,17 @@ import java.util.Locale
 class VideoActivity : AppCompatActivity() {
     private enum class Mode { DIRECT, STREAM }
 
+    companion object {
+        /**
+         * Video codecs that phones decode badly or not at all (MPEG-4 Part 2 = Xvid/DivX, old
+         * Microsoft and Flash codecs, MPEG-1/2): these go straight to the server's ffmpeg.
+         */
+        val SERVER_VIDEO = setOf(
+            "mpeg4", "msmpeg4v1", "msmpeg4v2", "msmpeg4v3", "wmv1", "wmv2", "wmv3", "vc1",
+            "flv1", "h263", "mpeg1video", "mpeg2video", "rv30", "rv40", "theora",
+        )
+    }
+
     private val player: ExoPlayer get() = Engine.player
     private lateinit var playerView: PlayerView
     private lateinit var tap: View
@@ -114,6 +125,10 @@ class VideoActivity : AppCompatActivity() {
         infoText = findViewById(R.id.info)
         findViewById<ImageButton>(R.id.back).setOnClickListener { finish() }
         findViewById<ImageButton>(R.id.streamBack).setOnClickListener { finish() }
+        // manual way out when the phone shows a broken / black picture
+        findViewById<Button>(R.id.toServer).setOnClickListener {
+            if (mode == Mode.DIRECT) switchToStream(positionSec())
+        }
         playPause = findViewById(R.id.playPause)
         seek = findViewById(R.id.seek)
         posText = findViewById(R.id.pos)
@@ -124,7 +139,7 @@ class VideoActivity : AppCompatActivity() {
         Engine.startVideo()
         player.addListener(listener)
         player.addAnalyticsListener(analytics)
-        playerView.player = player
+        playerView.player = Engine.control // its pause button fades out too
         playerView.setShowSubtitleButton(true)
         playerView.setControllerVisibilityListener(PlayerView.ControllerVisibilityListener { visibility ->
             if (mode == Mode.DIRECT) infoBar.visibility = visibility
@@ -133,7 +148,8 @@ class VideoActivity : AppCompatActivity() {
         tap.setOnClickListener { showControls() }
         controls.setOnClickListener { controls.visibility = View.GONE }
         playPause.setOnClickListener {
-            if (player.isPlaying) player.pause() else player.play()
+            val c = Engine.control
+            if (c.playWhenReady) c.pause() else c.play()
             showControls()
         }
         findViewById<Button>(R.id.audioBtn).setOnClickListener { chooseAudio() }
@@ -202,7 +218,14 @@ class VideoActivity : AppCompatActivity() {
                 info = null
                 info = try { probe(id) } catch (e: Exception) { null }
                 Recent.started(RecentItem("video", v.id, v.title, v.file, v.folder, 0.0, info?.duration ?: 0.0, System.currentTimeMillis()))
-                playDirect(Recent.resumeAt(v.id))
+                val codec = info?.video?.codec ?: ""
+                if (codec in SERVER_VIDEO) {
+                    // e.g. Xvid/DivX in AVI: Samsung's decoder "renders" black frames
+                    showBadge("${codec.uppercase()} video is converted by the server")
+                    switchToStream(Recent.resumeAt(v.id))
+                } else {
+                    playDirect(Recent.resumeAt(v.id))
+                }
             } catch (e: Exception) {
                 showMessage(e.message ?: e.toString())
             }
@@ -314,7 +337,7 @@ class VideoActivity : AppCompatActivity() {
             .build()
         player.setMediaItem(item, (atSec * 1000).toLong())
         player.prepare()
-        player.play()
+        Engine.control.play()
     }
 
     /** Can the phone decode at least one audio and one video track of the file? */
@@ -435,7 +458,7 @@ class VideoActivity : AppCompatActivity() {
             durText.text = fmtTime(inf.duration)
             player.setMediaItem(builder.build())
             player.prepare()
-            player.play()
+            Engine.control.play()
         }
     }
 
@@ -548,7 +571,7 @@ class VideoActivity : AppCompatActivity() {
 
     private fun updateControls() {
         if (mode != Mode.STREAM || controls.visibility != View.VISIBLE) return
-        playPause.setImageResource(if (player.isPlaying) R.drawable.ic_pause else R.drawable.ic_play)
+        playPause.setImageResource(if (Engine.control.playWhenReady) R.drawable.ic_pause else R.drawable.ic_play)
         if (!dragging) {
             val p = positionSec()
             seek.progress = p.toInt()

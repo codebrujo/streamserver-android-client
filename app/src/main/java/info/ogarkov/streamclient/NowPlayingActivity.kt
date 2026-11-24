@@ -56,7 +56,8 @@ class NowPlayingActivity : AppCompatActivity() {
         play = findViewById(R.id.play)
 
         val p = Engine.player
-        play.setOnClickListener { if (p.playWhenReady) p.pause() else p.play() }
+        val c = Engine.control
+        play.setOnClickListener { if (c.playWhenReady) c.pause() else c.play() }
         findViewById<ImageButton>(R.id.next).setOnClickListener { if (p.hasNextMediaItem()) p.seekToNextMediaItem() }
         findViewById<ImageButton>(R.id.prev).setOnClickListener {
             // like most players: restart the track unless it has just begun
@@ -109,7 +110,7 @@ class NowPlayingActivity : AppCompatActivity() {
         artist.text = listOf(t.artist, t.album).filter { it.isNotBlank() }.joinToString(" — ")
         file.text = t.file
         folder.text = t.folder
-        play.setImageResource(if (p.playWhenReady) R.drawable.ic_pause else R.drawable.ic_play)
+        play.setImageResource(if (Engine.control.playWhenReady) R.drawable.ic_pause else R.drawable.ic_play)
         tech.text = techLine(t, p.audioFormat)
 
         if (coverFolder != t.folder) {
