@@ -38,8 +38,7 @@ web UI.
 
 GitHub Actions (`.github/workflows/build.yml`):
 - for a pull request, the APK goes to the run's artifacts;
-- for a push to `main`, the APK is published as a GitHub Release (Releases → latest → `streamserver-N.apk`);
-- the result and the tail of the Gradle log go to the `ci-logs` branch.
+- for a push to `main`, the APK is published as a GitHub Release (Releases → latest → `streamserver-N.apk`).
 
 Signing uses two repository secrets: `KEYSTORE_BASE64` (the keystore in base64, alias `cinema`) and
 `KEYSTORE_PASSWORD`. Without them the APK is signed with a throwaway debug key, and every update has to be
