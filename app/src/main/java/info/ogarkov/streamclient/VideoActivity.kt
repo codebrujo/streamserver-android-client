@@ -27,6 +27,7 @@ import androidx.media3.common.Tracks
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.common.util.Util
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.analytics.AnalyticsListener
 import androidx.media3.ui.PlayerView
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
@@ -50,7 +51,8 @@ class VideoActivity : AppCompatActivity() {
     private lateinit var tap: View
     private lateinit var controls: View
     private lateinit var streamTitle: TextView
-    private lateinit var infoBar: TextView
+    private lateinit var infoBar: View
+    private lateinit var infoText: TextView
     private lateinit var playPause: ImageButton
     private lateinit var seek: SeekBar
     private lateinit var posText: TextView
@@ -66,6 +68,11 @@ class VideoActivity : AppCompatActivity() {
     // direct mode
     private var tracksChecked = false
     private var directRetries = 0
+
+    // is a picture really shown? (some decoders accept a format and then render nothing)
+    private var firstFrame = false
+    private var decoderName: String? = null
+    private val noPictureCheck = Runnable { checkPicture() }
 
     // stream mode
     private var offsetSec = 0.0
@@ -103,7 +110,10 @@ class VideoActivity : AppCompatActivity() {
         tap = findViewById(R.id.tap)
         controls = findViewById(R.id.streamControls)
         streamTitle = findViewById(R.id.streamTitle)
-        infoBar = findViewById(R.id.info)
+        infoBar = findViewById(R.id.infoBar)
+        infoText = findViewById(R.id.info)
+        findViewById<ImageButton>(R.id.back).setOnClickListener { finish() }
+        findViewById<ImageButton>(R.id.streamBack).setOnClickListener { finish() }
         playPause = findViewById(R.id.playPause)
         seek = findViewById(R.id.seek)
         posText = findViewById(R.id.pos)
@@ -113,6 +123,7 @@ class VideoActivity : AppCompatActivity() {
 
         Engine.startVideo()
         player.addListener(listener)
+        player.addAnalyticsListener(analytics)
         playerView.player = player
         playerView.setShowSubtitleButton(true)
         playerView.setControllerVisibilityListener(PlayerView.ControllerVisibilityListener { visibility ->
@@ -162,6 +173,7 @@ class VideoActivity : AppCompatActivity() {
         handler.removeCallbacksAndMessages(null)
         savePosition()
         player.removeListener(listener)
+        player.removeAnalyticsListener(analytics)
         playerView.player = null
         if (!Engine.audioMode) {
             player.stop()
@@ -247,6 +259,7 @@ class VideoActivity : AppCompatActivity() {
         }
         val d = durationSec()
         if (d > 0 && v.size > 0) parts += fmtBitrate(v.size * 8 / d)
+        decoderName?.let { parts += "decoder ${it.removePrefix("c2.").removePrefix("OMX.")}" + if (firstFrame) "" else " (no picture yet)" }
         parts += when {
             mode == Mode.DIRECT -> "original file"
             info?.mode(audioIdx) == "audio" -> "server: audio transcoding"
@@ -257,7 +270,7 @@ class VideoActivity : AppCompatActivity() {
 
     private fun refreshInfo() {
         val text = infoText()
-        infoBar.text = text
+        infoText.text = text
         streamTitle.text = text
     }
 
@@ -270,6 +283,9 @@ class VideoActivity : AppCompatActivity() {
         val v = video ?: return
         mode = Mode.DIRECT
         tracksChecked = false
+        firstFrame = false
+        decoderName = null
+        handler.removeCallbacks(noPictureCheck)
         tap.visibility = View.GONE
         controls.visibility = View.GONE
         playerView.useController = true
@@ -316,6 +332,23 @@ class VideoActivity : AppCompatActivity() {
             val codec = tracks.groups.firstOrNull { it.type == type }?.getTrackFormat(0)?.sampleMimeType?.substringAfter('/') ?: ""
             showBadge("This phone can't decode ${if (!videoOk) "video" else "audio"} $codec — the server will convert it")
             switchToStream(positionSec())
+        }
+    }
+
+    /**
+     * Sound but a black screen: the phone's decoder took the video track but renders nothing
+     * (typical for some Xvid/DivX and exotic HEVC files). Hand the file to the server instead.
+     */
+    private fun checkPicture() {
+        if (firstFrame || !player.isPlaying || info?.video == null) return
+        val hasVideo = player.currentTracks.groups.any { it.type == C.TRACK_TYPE_VIDEO }
+        if (!hasVideo) return
+        if (mode == Mode.DIRECT) {
+            showBadge("No picture from the phone's decoder — the server will convert the video")
+            switchToStream(positionSec())
+        } else {
+            refreshInfo()
+            showBadge("No picture yet: " + (decoderName ?: "no video decoder"))
         }
     }
 
@@ -386,6 +419,8 @@ class VideoActivity : AppCompatActivity() {
             val (start, ss) = if (at > 0) seekPoint(v.id, at) else 0.0 to 0.0
             offsetSec = start
             nonce++
+            firstFrame = false
+            handler.removeCallbacks(noPictureCheck)
             val url = Api.url("/api/transcode/${v.id}", "start" to f3(start), "ss" to f3(ss), "audio" to audioIdx.toString(), "n" to nonce.toString())
             val builder = MediaItem.Builder()
                 .setUri(url)
@@ -552,6 +587,18 @@ class VideoActivity : AppCompatActivity() {
         open(next.id)
     }
 
+    private val analytics = object : AnalyticsListener {
+        override fun onVideoDecoderInitialized(
+            eventTime: AnalyticsListener.EventTime,
+            decoderName: String,
+            initializedTimestampMs: Long,
+            initializationDurationMs: Long,
+        ) {
+            this@VideoActivity.decoderName = decoderName
+            refreshInfo()
+        }
+    }
+
     private val listener = object : Player.Listener {
         override fun onPlaybackStateChanged(state: Int) {
             if (Engine.audioMode) return
@@ -559,6 +606,10 @@ class VideoActivity : AppCompatActivity() {
                 Player.STATE_READY -> {
                     hideMessage()
                     if (mode == Mode.DIRECT) directRetries = 0
+                    if (!firstFrame) {
+                        handler.removeCallbacks(noPictureCheck)
+                        handler.postDelayed(noPictureCheck, 6000)
+                    }
                 }
                 Player.STATE_ENDED -> {
                     // a cut-off server stream also "ends": only a real end moves on
@@ -572,6 +623,12 @@ class VideoActivity : AppCompatActivity() {
         override fun onIsPlayingChanged(isPlaying: Boolean) {
             updateControls()
             if (!isPlaying) savePosition()
+        }
+
+        override fun onRenderedFirstFrame() {
+            firstFrame = true
+            handler.removeCallbacks(noPictureCheck)
+            refreshInfo()
         }
 
         override fun onTracksChanged(tracks: Tracks) {

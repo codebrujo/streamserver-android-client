@@ -69,7 +69,8 @@ class MainActivity : AppCompatActivity() {
     private var miniFolder: String? = null
 
     private val settings = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) {
-        if (Prefs.password.isEmpty()) finish() else Conn.recheck()
+        // back from Settings: always return to the library and reconnect with the new values
+        Conn.recheck()
     }
     private val notifications = registerForActivityResult(ActivityResultContracts.RequestPermission()) { }
 
@@ -95,6 +96,7 @@ class MainActivity : AppCompatActivity() {
 
         findViewById<ImageButton>(R.id.refresh).setOnClickListener { loadLibrary(true) }
         findViewById<ImageButton>(R.id.settings).setOnClickListener { openSettings() }
+        status.setOnClickListener { if (Conn.base == null || libraryError != null) openSettings() }
         search.addTextChangedListener(object : TextWatcher {
             override fun beforeTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
             override fun onTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
@@ -148,7 +150,7 @@ class MainActivity : AppCompatActivity() {
             Conn.Mode.CHECKING -> "Connecting…" to R.color.muted
             Conn.Mode.LOCAL -> "● Local connection · $host" to R.color.local
             Conn.Mode.GLOBAL -> "● Global connection · $host" to R.color.global
-            Conn.Mode.OFFLINE -> (if (Prefs.password.isEmpty()) "● No connection: set the password in Settings" else "● No connection") to R.color.offline
+            Conn.Mode.OFFLINE -> (if (Prefs.password.isEmpty()) "● No connection: set the password in Settings" else "● No connection · tap for Settings") to R.color.offline
         }
         val extra = when {
             libraryLoading -> " · loading library…"
@@ -177,9 +179,6 @@ class MainActivity : AppCompatActivity() {
                     folderErrors.clear()
                     Toast.makeText(this@MainActivity, "Library rescanned", Toast.LENGTH_SHORT).show()
                 }
-            } catch (e: AuthException) {
-                libraryError = e.message
-                openSettings()
             } catch (e: Exception) {
                 libraryError = e.message ?: e.toString()
             } finally {
