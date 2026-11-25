@@ -227,6 +227,19 @@ object Api {
         }
     }
 
+    /** POST / PUT / DELETE with an optional JSON body; returns the response text. */
+    suspend fun send(method: String, url: String, json: JSONObject?): String = withContext(Dispatchers.IO) {
+        val body = json?.toString()?.toRequestBody("application/json".toMediaType())
+        http.newCall(Request.Builder().url(url).method(method, body).build()).execute().use {
+            val t = it.body?.string() ?: ""
+            if (!it.isSuccessful) {
+                val msg = try { JSONObject(t).optString("error") } catch (e: Exception) { "" }
+                throw IOException(msg.ifBlank { "HTTP ${it.code}" })
+            }
+            t
+        }
+    }
+
     suspend fun bytes(url: String): ByteArray? = withContext(Dispatchers.IO) {
         try {
             http.newCall(Request.Builder().url(url).build()).execute().use { if (it.isSuccessful) it.body?.bytes() else null }

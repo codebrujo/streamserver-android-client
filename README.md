@@ -21,6 +21,15 @@ the home video and music library on mediaserver.
   the track is delivered (original or converted).
 - **Album covers** on the music screen, in the mini player and in the notification.
 
+- **Playlists**, shared with the web UI (`/api/playlists`): a *Playlists* folder at the top level next to Video
+  and Music. *New playlist* creates one; tap a playlist to see its tracks, tap a track to play the playlist
+  from it, long-press the playlist to play it from the start. The ✎ icon opens the editor:
+  - *Contents*: the music tree with a check box at every track (and *All tracks* per folder);
+  - *Order*: the chosen tracks; drag a row by its handle (or long-press it) to move it, ✕ removes it.
+
+  *Save* stores the changes on the server; the trash icon deletes the playlist (the files stay on the drive).
+  Tracks whose files are gone are shown greyed and skipped when playing.
+
 Long-press a music folder to play it from the first track.
 
 ## How video is played

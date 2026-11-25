@@ -68,6 +68,7 @@ data class Track(
     val deliverOrig: String?, // null = the original file is sent as-is
     val deliverEco: String?,
     val folder: String,
+    val missing: Boolean = false, // in a playlist, but the file is gone from the drive
 ) {
     /** Track ids are base64url JSON {f: "relative/path.flac", s, e} (s/e = CUE track bounds). */
     val file: String by lazy {
@@ -118,6 +119,9 @@ data class RecentItem(
     val at: Long,
 )
 
+/** A playlist as listed by GET /api/playlists. */
+data class PlaylistInfo(val id: String, val name: String, val count: Int, val duration: Double, val cover: String?)
+
 /** A folder of the browse tree. Keys: "v:<path>" for video, "m:<path>" for music; roots are "v:" and "m:". */
 class Node(val key: String, val name: String, val path: String, val music: Boolean) {
     val folders = ArrayList<Node>()
@@ -144,6 +148,13 @@ object Library {
         private set
 
     private val tracks = HashMap<String, List<Track>>()
+
+    // playlists (/api/playlists, shared with the web UI)
+    @Volatile var playlistsEnabled = false
+        private set
+    @Volatile var playlists: List<PlaylistInfo> = emptyList()
+        private set
+    private val playlistTracks = HashMap<String, List<Track>>()
     private var videoOrder: List<Video> = emptyList()
     private var musicOrder: List<String> = emptyList()
 
@@ -167,6 +178,7 @@ object Library {
         musicRoot = buildMusicTree(folders)
         videoOrder = ArrayList<Video>().also { collectVideos(videoRoot, it) }
         musicOrder = ArrayList<String>().also { collectMusic(musicRoot, it) }
+        if (music) loadPlaylistList() else playlistsEnabled = false
         loaded = true
         bump()
     }
@@ -177,25 +189,95 @@ object Library {
         cachedTracks(path)?.let { return it }
         val o = JSONObject(Api.text(Api.url("/api/music/folder", "path" to path)))
         val arr = o.optJSONArray("tracks") ?: JSONArray()
-        val list = (0 until arr.length()).map {
-            val t = arr.getJSONObject(it)
-            val d = t.optJSONObject("deliver")
-            Track(
-                id = t.getString("id"),
-                n = t.optInt("n"),
-                title = englishTitle(t.optString("title")),
-                artist = t.optString("artist"),
-                album = t.optString("album"),
-                duration = t.optDouble("duration", 0.0),
-                format = t.optString("format"),
-                quality = t.optString("quality").replace("кГц", "kHz"),
-                deliverOrig = optLabel(d, "orig"),
-                deliverEco = optLabel(d, "eco"),
-                folder = path,
-            )
-        }
+        val list = (0 until arr.length()).map { parseTrack(arr.getJSONObject(it), path) }
         synchronized(tracks) { tracks[path] = list }
         return list
+    }
+
+    private fun parseTrack(t: JSONObject, folder: String): Track {
+        val d = t.optJSONObject("deliver")
+        return Track(
+            id = t.getString("id"),
+            n = t.optInt("n"),
+            title = englishTitle(t.optString("title")),
+            artist = t.optString("artist"),
+            album = t.optString("album"),
+            duration = t.optDouble("duration", 0.0),
+            format = t.optString("format"),
+            quality = t.optString("quality").replace("кГц", "kHz"),
+            deliverOrig = optLabel(d, "orig"),
+            deliverEco = optLabel(d, "eco"),
+            folder = folder,
+            missing = t.optBoolean("missing"),
+        )
+    }
+
+    /** The fields the server keeps for a playlist track (see playlists.js). */
+    fun trackJson(t: Track): JSONObject = JSONObject()
+        .put("id", t.id)
+        .put("n", t.n)
+        .put("title", t.title)
+        .put("artist", t.artist)
+        .put("album", t.album)
+        .put("duration", t.duration)
+        .put("folder", t.folder)
+        .put("format", t.format)
+        .put("quality", t.quality)
+        .put("deliver", JSONObject().put("orig", t.deliverOrig ?: JSONObject.NULL).put("eco", t.deliverEco ?: JSONObject.NULL))
+
+    // ---------- playlists ----------
+
+    /** Reload the list of playlists (names, counts); drops cached playlist contents. */
+    suspend fun loadPlaylistList() {
+        try {
+            val arr = JSONArray(Api.text(Api.url("/api/playlists")))
+            playlists = (0 until arr.length()).map {
+                val o = arr.getJSONObject(it)
+                PlaylistInfo(o.getString("id"), o.optString("name"), o.optInt("count"), o.optDouble("duration", 0.0),
+                    if (o.isNull("cover")) null else o.optString("cover"))
+            }.sortedWith { a, b -> natural.compare(a.name, b.name) }
+            playlistsEnabled = true
+        } catch (e: AuthException) {
+            throw e
+        } catch (e: Exception) {
+            // an older server without playlists
+            playlists = emptyList()
+            playlistsEnabled = false
+        }
+        synchronized(playlistTracks) { playlistTracks.clear() }
+        bump()
+    }
+
+    fun cachedPlaylist(id: String): List<Track>? = synchronized(playlistTracks) { playlistTracks[id] }
+
+    /** Name and tracks of a playlist (tracks whose files are gone are marked [Track.missing]). */
+    suspend fun playlist(id: String): Pair<String, List<Track>> {
+        val o = JSONObject(Api.text(Api.url("/api/playlists/$id")))
+        val arr = o.optJSONArray("tracks") ?: JSONArray()
+        val list = (0 until arr.length()).map {
+            val t = arr.getJSONObject(it)
+            parseTrack(t, t.optString("folder"))
+        }
+        synchronized(playlistTracks) { playlistTracks[id] = list }
+        return o.optString("name") to list
+    }
+
+    suspend fun createPlaylist(name: String): String {
+        val o = JSONObject(Api.send("POST", Api.url("/api/playlists"), JSONObject().put("name", name)))
+        loadPlaylistList()
+        return o.getString("id")
+    }
+
+    suspend fun savePlaylist(id: String, name: String, list: List<Track>) {
+        val arr = JSONArray()
+        list.forEach { arr.put(trackJson(it)) }
+        Api.send("PUT", Api.url("/api/playlists/$id"), JSONObject().put("name", name).put("tracks", arr))
+        loadPlaylistList()
+    }
+
+    suspend fun deletePlaylist(id: String) {
+        Api.send("DELETE", Api.url("/api/playlists/$id"), null)
+        loadPlaylistList()
     }
 
     private fun optLabel(o: JSONObject?, key: String): String? =

@@ -19,6 +19,7 @@ import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import androidx.core.view.ViewCompat
@@ -47,7 +48,14 @@ sealed class Row {
     data class MusicFile(val folder: String, val file: String) : Row()
     data class RecentEntry(val item: RecentItem) : Row()
     data class Info(val text: String, val depth: Int, val retryFolder: String?) : Row()
+    data class PlaylistsRoot(val open: Boolean) : Row()
+    data class NewPlaylist(val depth: Int) : Row()
+    data class PlaylistEntry(val info: PlaylistInfo, val depth: Int, val open: Boolean) : Row()
+    data class PlaylistTrack(val playlistId: String, val track: Track, val index: Int, val depth: Int) : Row()
 }
+
+private const val PLAYLISTS_KEY = "p:"
+private fun playlistKey(id: String) = "pl:$id"
 
 class MainActivity : AppCompatActivity() {
     private lateinit var list: RecyclerView
@@ -72,6 +80,7 @@ class MainActivity : AppCompatActivity() {
         // back from Settings: always return to the library and reconnect with the new values
         Conn.recheck()
     }
+    private val editor = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { render() }
     private val notifications = registerForActivityResult(ActivityResultContracts.RequestPermission()) { }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -210,6 +219,7 @@ class MainActivity : AppCompatActivity() {
                 rows += Row.Header("Library", false)
                 addNode(Library.videoRoot, 0, rows)
                 if (Library.musicEnabled) addNode(Library.musicRoot, 0, rows)
+                if (Library.playlistsEnabled) addPlaylists(rows)
             }
         }
         adapter.submit(rows)
@@ -253,6 +263,98 @@ class MainActivity : AppCompatActivity() {
                     rows += Row.Info("Loading…", depth + 1, null)
                     loadTracks(n.path)
                 }
+            }
+        }
+    }
+
+    /** "Playlists" next to Video and Music: new playlist, then the playlists, each expandable. */
+    private fun addPlaylists(rows: MutableList<Row>) {
+        val open = PLAYLISTS_KEY in expanded
+        rows += Row.PlaylistsRoot(open)
+        if (!open) return
+        rows += Row.NewPlaylist(1)
+        for (p in Library.playlists) {
+            val key = playlistKey(p.id)
+            val pOpen = key in expanded
+            rows += Row.PlaylistEntry(p, 1, pOpen)
+            if (!pOpen) continue
+            val tracks = Library.cachedPlaylist(p.id)
+            when {
+                tracks != null && tracks.isEmpty() -> rows += Row.Info("Empty — tap ✎ to add tracks", 2, null)
+                tracks != null -> tracks.forEachIndexed { i, t -> rows += Row.PlaylistTrack(p.id, t, i, 2) }
+                folderErrors[key] != null -> rows += Row.Info("Failed: ${folderErrors[key]} — tap to retry", 2, key)
+                else -> {
+                    rows += Row.Info("Loading…", 2, null)
+                    loadPlaylist(p.id)
+                }
+            }
+        }
+    }
+
+    private fun loadPlaylist(id: String) {
+        val key = playlistKey(id)
+        if (!loadingFolders.add(key)) return
+        folderErrors.remove(key)
+        lifecycleScope.launch {
+            try {
+                Library.playlist(id)
+            } catch (e: Exception) {
+                folderErrors[key] = e.message ?: e.toString()
+            } finally {
+                loadingFolders.remove(key)
+                render()
+            }
+        }
+    }
+
+    private fun toggleKey(key: String) {
+        if (!expanded.remove(key)) expanded += key
+        Prefs.expanded = expanded.toSet()
+        render()
+    }
+
+    private fun openEditor(id: String) {
+        editor.launch(Intent(this, PlaylistEditActivity::class.java).putExtra("id", id))
+    }
+
+    private fun newPlaylist() {
+        val input = EditText(this)
+        input.hint = "Playlist name"
+        input.setSingleLine()
+        val pad = (20 * resources.displayMetrics.density).toInt()
+        val box = android.widget.FrameLayout(this)
+        box.setPadding(pad, pad / 2, pad, 0)
+        box.addView(input)
+        AlertDialog.Builder(this)
+            .setTitle("New playlist")
+            .setView(box)
+            .setPositiveButton("Create") { _, _ ->
+                val name = input.text.toString().trim()
+                if (name.isEmpty()) return@setPositiveButton
+                lifecycleScope.launch {
+                    try {
+                        val id = Library.createPlaylist(name)
+                        openEditor(id) // straight to picking tracks, like the web UI
+                    } catch (e: Exception) {
+                        Toast.makeText(this@MainActivity, e.message ?: e.toString(), Toast.LENGTH_LONG).show()
+                    }
+                }
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    private fun playPlaylist(id: String, trackId: String?) {
+        lifecycleScope.launch {
+            try {
+                val tracks = Library.cachedPlaylist(id) ?: Library.playlist(id).second
+                if (tracks.none { !it.missing }) {
+                    Toast.makeText(this@MainActivity, "The playlist has no playable tracks", Toast.LENGTH_SHORT).show()
+                    return@launch
+                }
+                Engine.playPlaylist(id, tracks, trackId, if (trackId != null) Recent.resumeAt(trackId) else 0.0)
+            } catch (e: Exception) {
+                Toast.makeText(this@MainActivity, e.message ?: e.toString(), Toast.LENGTH_SHORT).show()
             }
         }
     }
@@ -381,6 +483,8 @@ class MainActivity : AppCompatActivity() {
             count.text = ""
             name.setTextColor(ContextCompat.getColor(this@MainActivity, R.color.text))
             v.setOnLongClickListener(null)
+            val edit = v.findViewById<ImageButton>(R.id.edit)
+            edit.visibility = View.GONE
             val playingId = Engine.currentTrack()?.id
 
             when (row) {
@@ -446,7 +550,69 @@ class MainActivity : AppCompatActivity() {
                     name.setTextColor(ContextCompat.getColor(this@MainActivity, R.color.muted))
                     setMeta("")
                     val retry = row.retryFolder
-                    v.setOnClickListener { if (retry != null) loadTracks(retry) }
+                    v.setOnClickListener {
+                        when {
+                            retry == null -> {}
+                            retry.startsWith("pl:") -> loadPlaylist(retry.removePrefix("pl:"))
+                            else -> loadTracks(retry)
+                        }
+                    }
+                }
+                is Row.PlaylistsRoot -> {
+                    indent(0)
+                    chevron.visibility = View.VISIBLE
+                    chevron.setImageResource(if (row.open) R.drawable.ic_chevron_down else R.drawable.ic_chevron_right)
+                    icon.setImageResource(R.drawable.ic_playlist)
+                    name.text = "Playlists"
+                    setMeta("")
+                    count.text = Library.playlists.size.toString()
+                    v.setOnClickListener { toggleKey(PLAYLISTS_KEY) }
+                }
+                is Row.NewPlaylist -> {
+                    indent(row.depth)
+                    icon.setImageResource(R.drawable.ic_add)
+                    name.text = "New playlist"
+                    name.setTextColor(ContextCompat.getColor(this@MainActivity, R.color.accent))
+                    setMeta("")
+                    v.setOnClickListener { newPlaylist() }
+                }
+                is Row.PlaylistEntry -> {
+                    val p = row.info
+                    indent(row.depth)
+                    chevron.visibility = View.VISIBLE
+                    chevron.setImageResource(if (row.open) R.drawable.ic_chevron_down else R.drawable.ic_chevron_right)
+                    icon.setImageResource(R.drawable.ic_playlist)
+                    name.text = p.name
+                    if (Engine.playlistId == p.id && playingId != null) name.setTextColor(ContextCompat.getColor(this@MainActivity, R.color.accent))
+                    setMeta("${p.count} tracks · ${fmtTime(p.duration)}")
+                    edit.visibility = View.VISIBLE
+                    edit.setOnClickListener { openEditor(p.id) }
+                    v.setOnClickListener { toggleKey(playlistKey(p.id)) }
+                    v.setOnLongClickListener {
+                        playPlaylist(p.id, null)
+                        Toast.makeText(this@MainActivity, "Playing ${p.name}", Toast.LENGTH_SHORT).show()
+                        true
+                    }
+                }
+                is Row.PlaylistTrack -> {
+                    val t = row.track
+                    indent(row.depth)
+                    icon.setImageResource(R.drawable.ic_music)
+                    name.text = "${row.index + 1}. ${t.title}"
+                    count.text = fmtTime(t.duration)
+                    if (t.missing) {
+                        name.setTextColor(ContextCompat.getColor(this@MainActivity, R.color.muted))
+                        setMeta("file is missing · ${t.folder}")
+                        v.setOnClickListener {
+                            Toast.makeText(this@MainActivity, "This file is no longer on the drive", Toast.LENGTH_SHORT).show()
+                        }
+                    } else {
+                        if (t.id == playingId && Engine.playlistId == row.playlistId) {
+                            name.setTextColor(ContextCompat.getColor(this@MainActivity, R.color.accent))
+                        }
+                        setMeta(listOf(t.artist, t.album).filter { it.isNotBlank() }.joinToString(" — "))
+                        v.setOnClickListener { playPlaylist(row.playlistId, t.id) }
+                    }
                 }
                 is Row.Header -> {}
             }

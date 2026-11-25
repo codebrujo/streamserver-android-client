@@ -71,6 +71,11 @@ object Engine {
     private val trackById = HashMap<String, Track>()
     private val qById = HashMap<String, String>()
     private var lastFolder = "" // the folder whose tracks were appended last
+    private var continueFolders = true // false while a playlist plays: it ends with its last track
+
+    /** id of the playlist that is playing, null when playing folders */
+    @Volatile var playlistId: String? = null
+        private set
     private var appending = false
     private var errorRetries = 0
 
@@ -134,6 +139,21 @@ object Engine {
     }
 
     fun playMusic(folder: String, tracks: List<Track>, index: Int, startSec: Double) {
+        continueFolders = true
+        playlistId = null
+        startMusic(folder, tracks, index, startSec)
+    }
+
+    /** Play a playlist from the track with [trackId] (or from the start); files that are gone are skipped. */
+    fun playPlaylist(id: String, tracks: List<Track>, trackId: String?, startSec: Double) {
+        val list = tracks.filter { !it.missing }
+        if (list.isEmpty()) return
+        continueFolders = false
+        playlistId = id
+        startMusic(list.first().folder, list, list.indexOfFirst { it.id == trackId }.coerceAtLeast(0), startSec)
+    }
+
+    private fun startMusic(folder: String, tracks: List<Track>, index: Int, startSec: Double) {
         if (tracks.isEmpty()) return
         audioMode = true
         errorRetries = 0
@@ -193,7 +213,7 @@ object Engine {
 
     /** Near the end of the playlist: append the next folder of the tree. */
     private fun appendIfNeeded() {
-        if (!audioMode || appending) return
+        if (!audioMode || appending || !continueFolders) return
         if (player.currentMediaItemIndex < player.mediaItemCount - 2) return
         appending = true
         scope.launch {
