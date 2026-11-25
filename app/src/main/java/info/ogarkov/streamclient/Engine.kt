@@ -219,8 +219,13 @@ object Engine {
     }
 
     /** local files have no duration until they are opened */
-    private fun durationOf(t: Track): Double =
-        if (t.duration > 0) t.duration else if (player.duration > 0) player.duration / 1000.0 else 0.0
+    private fun durationOf(t: Track): Double {
+        if (t.duration > 0) return t.duration
+        if (player.duration <= 0) return 0.0
+        val d = player.duration / 1000.0
+        t.localUri?.let { LocalMedia.rememberDuration(it, d) } // for playlist totals
+        return d
+    }
 
     private fun onTrackStarted() {
         val t = currentTrack() ?: return
