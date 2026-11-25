@@ -54,6 +54,18 @@
         android:textColor="@color/accent"
         android:textSize="12sp" />
 
+    <!-- tracks: listen before ticking -->
+    <ImageButton
+        android:id="@+id/play"
+        android:layout_width="44dp"
+        android:layout_height="44dp"
+        android:background="?attr/selectableItemBackgroundBorderless"
+        android:contentDescription="Play"
+        android:padding="10dp"
+        android:scaleType="fitCenter"
+        android:src="@drawable/ic_play"
+        android:visibility="gone" />
+
     <!-- the whole row toggles it -->
     <CheckBox
         android:id="@+id/check"
