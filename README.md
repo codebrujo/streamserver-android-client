@@ -1,6 +1,6 @@
-# Streamserver Android client
+# Streamclient
 
-Native Android client (Kotlin, Media3/ExoPlayer) for [streamserver](https://github.com/codebrujo/streamserver):
+Streamclient: native Android client (Kotlin, Media3/ExoPlayer) for [streamserver](https://github.com/codebrujo/streamserver):
 the home video and music library on mediaserver.
 
 ## Features
@@ -38,7 +38,7 @@ web UI.
 
 GitHub Actions (`.github/workflows/build.yml`):
 - for a pull request, the APK goes to the run's artifacts;
-- for a push to `main`, the APK is published as a GitHub Release (Releases → latest → `streamserver-N.apk`).
+- for a push to `main`, the APK is published as a GitHub Release (Releases → latest → `streamclient-N.apk`).
 
 Signing uses two repository secrets: `KEYSTORE_BASE64` (the keystore in base64, alias `cinema`) and
 `KEYSTORE_PASSWORD`. Without them the APK is signed with a throwaway debug key, and every update has to be
