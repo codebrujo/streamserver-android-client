@@ -81,6 +81,29 @@ object LocalMedia {
         fillDurations() // files from an earlier scan that were not measured yet
     }
 
+    /**
+     * Saving a playlist: give every local track a length, reading it from the file now when the
+     * background pass hasn't got to it yet (or couldn't read it then). The lengths are kept here too.
+     */
+    suspend fun withDurations(tracks: List<Track>): List<Track> = withContext(Dispatchers.IO) {
+        var measured = false
+        val out = tracks.map { t ->
+            val uri = t.localUri
+            if (uri == null || t.duration > 0) return@map t
+            var d = durations[uri] ?: 0.0
+            if (d <= 0) {
+                d = readDuration(uri)
+                if (d > 0) {
+                    durations[uri] = d
+                    measured = true
+                }
+            }
+            if (d > 0) t.copy(duration = d) else t
+        }
+        if (measured) persist()
+        out
+    }
+
     /** Read the length of every local audio file that doesn't have one yet (background, a few ms per file). */
     fun fillDurations() {
         if (filling) return
