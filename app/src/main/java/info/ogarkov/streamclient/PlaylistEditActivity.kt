@@ -13,6 +13,7 @@ import android.widget.EditText
 import android.widget.ImageButton
 import android.widget.ImageView
 import android.widget.ProgressBar
+import android.widget.RadioGroup
 import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.OnBackPressedCallback
@@ -47,6 +48,9 @@ class PlaylistEditActivity : AppCompatActivity() {
     private val selected = ArrayList<Track>()
     private val selectedIds = HashSet<String>()
     private var savedName = ""
+    private var savedLoop = false
+    private var isPhone = false // a playlist kept on the phone (may mix in local files, has a play order)
+    private lateinit var playOrder: RadioGroup
     private var savedIds: List<String> = emptyList()
     private var ready = false
     private var busy = false
@@ -67,6 +71,9 @@ class PlaylistEditActivity : AppCompatActivity() {
         applySystemBarPadding(findViewById(R.id.root))
 
         playlistId = intent.getStringExtra("id") ?: return finish()
+        isPhone = LocalPlaylists.isLocal(playlistId)
+        playOrder = findViewById(R.id.playOrder)
+        findViewById<View>(R.id.orderRow).visibility = if (isPhone) View.VISIBLE else View.GONE
         nameField = findViewById(R.id.name)
         contents = findViewById(R.id.contents)
         order = findViewById(R.id.order)
@@ -115,6 +122,11 @@ class PlaylistEditActivity : AppCompatActivity() {
             if (c.playWhenReady) c.pause() else c.play()
             return
         }
+        val local = t.localUri?.let { LocalMedia.item(it) }
+        if (local != null) {
+            LocalMedia.playAudio(local, 0.0)
+            return
+        }
         val tracks = Library.cachedTracks(t.folder) ?: return
         Engine.playMusic(t.folder, tracks, tracks.indexOfFirst { it.id == t.id }.coerceAtLeast(0), 0.0)
     }
@@ -123,9 +135,14 @@ class PlaylistEditActivity : AppCompatActivity() {
         spinner.visibility = View.VISIBLE
         lifecycleScope.launch {
             try {
-                if (!Library.loaded) Library.load(false)
+                if (!Library.loaded) {
+                    // a phone playlist can be edited offline, with the local files only
+                    try { Library.load(false) } catch (e: Exception) { if (!isPhone) throw e }
+                }
                 val (name, tracks) = Library.playlist(playlistId)
                 savedName = name
+                savedLoop = LocalPlaylists.get(playlistId)?.loop ?: false
+                playOrder.check(if (savedLoop) R.id.playLoop else R.id.playLinear)
                 savedIds = tracks.map { it.id }
                 nameField.setText(name)
                 selected.clear()
@@ -162,9 +179,11 @@ class PlaylistEditActivity : AppCompatActivity() {
     private fun changed() {
         val counts = HashMap<String, Int>()
         for (t in selected) {
-            var f = t.folder
+            // local files: "local:<cat>:<path>", counted within their category
+            val prefix = if (t.folder.startsWith("local:")) t.folder.substring(0, 8) else ""
+            var f = t.folder.removePrefix(prefix)
             while (true) {
-                counts[f] = (counts[f] ?: 0) + 1
+                counts[prefix + f] = (counts[prefix + f] ?: 0) + 1
                 if (f.isEmpty()) break
                 f = if (f.contains('/')) f.substringBeforeLast('/') else ""
             }
@@ -179,7 +198,9 @@ class PlaylistEditActivity : AppCompatActivity() {
     }
 
     private fun isDirty(): Boolean =
-        ready && (nameField.text.toString().trim() != savedName || selected.map { it.id } != savedIds)
+        ready && (nameField.text.toString().trim() != savedName || selected.map { it.id } != savedIds || loop() != savedLoop)
+
+    private fun loop() = isPhone && playOrder.checkedRadioButtonId == R.id.playLoop
 
     private fun setIn(tracks: List<Track>, on: Boolean) {
         if (on) {
@@ -205,8 +226,9 @@ class PlaylistEditActivity : AppCompatActivity() {
         saveButton.isEnabled = false
         lifecycleScope.launch {
             try {
-                Library.savePlaylist(playlistId, name, selected.toList())
+                Library.savePlaylist(playlistId, name, selected.toList(), loop())
                 savedName = name
+                savedLoop = loop()
                 savedIds = selected.map { it.id }
                 setResult(Activity.RESULT_OK)
                 Toast.makeText(this@PlaylistEditActivity, "Saved", Toast.LENGTH_SHORT).show()
@@ -261,6 +283,9 @@ class PlaylistEditActivity : AppCompatActivity() {
         data class Info(val text: String, val depth: Int, val retry: String?) : Pick()
     }
 
+    /** key of [selectedPerFolder] for a tree folder ("l:a:x" → "local:a:x", server folders: their path) */
+    private fun countKey(n: Node) = if (n.key.startsWith("l:")) "local:" + n.key.removePrefix("l:") else n.path
+
     private fun loadFolder(path: String) {
         if (!loading.add(path)) return
         errors.remove(path)
@@ -283,18 +308,32 @@ class PlaylistEditActivity : AppCompatActivity() {
         fun rebuild() {
             val out = ArrayList<Pick>()
             val root = Library.musicRoot
-            root.folders.forEach { add(it, 0, out) }
-            if (root.hasTracks) addTracks(root, 0, out)
+            val server = Library.loaded && Library.musicEnabled
+            if (!isPhone) {
+                root.folders.forEach { add(it, 0, out) }
+                if (root.hasTracks) addTracks(root, 0, out)
+            } else {
+                // phone playlist: the server's music and the local Audiobooks / Music folders side by side
+                if (server) add(root, 0, out) else out += Pick.Info("Server music is not available offline", 0, null)
+                LocalMedia.root.folders.filter { it.key == "l:a:" || it.key == "l:m:" }.forEach { add(it, 0, out) }
+                if (!LocalMedia.configured()) out += Pick.Info("Local folders: choose them in Settings → Local media", 0, null)
+            }
             rows = out
             notifyDataSetChanged()
         }
 
         private fun add(n: Node, depth: Int, out: MutableList<Pick>) {
-            val isOpen = n.path in open
+            val isOpen = n.key in open
             out += Pick.Folder(n, depth, isOpen)
             if (!isOpen) return
             n.folders.forEach { add(it, depth + 1, out) }
-            if (n.hasTracks) addTracks(n, depth + 1, out)
+            if (n.key.startsWith("l:")) {
+                val files = n.localFiles.map { LocalMedia.track(it) }
+                if (files.size > 1) out += Pick.All(files, depth + 1)
+                files.forEach { out += Pick.Item(it, depth + 1) }
+            } else if (n.hasTracks) {
+                addTracks(n, depth + 1, out)
+            }
         }
 
         private fun addTracks(n: Node, depth: Int, out: MutableList<Pick>) {
@@ -345,13 +384,24 @@ class PlaylistEditActivity : AppCompatActivity() {
                     indent(row.depth)
                     chevron.visibility = View.VISIBLE
                     chevron.setImageResource(if (row.open) R.drawable.ic_chevron_down else R.drawable.ic_chevron_right)
-                    icon.setImageResource(R.drawable.ic_folder)
-                    name.text = row.node.name
+                    val key = row.node.key
+                    icon.setImageResource(
+                        when {
+                            !isPhone || row.depth > 0 -> R.drawable.ic_folder
+                            key.startsWith("l:") -> R.drawable.ic_phone
+                            else -> R.drawable.ic_cloud
+                        },
+                    )
+                    name.text = when {
+                        !isPhone || row.depth > 0 -> row.node.name
+                        key.startsWith("l:") -> "${row.node.name} on this phone"
+                        else -> "Music on the server"
+                    }
                     setMeta("")
-                    val n = selectedPerFolder[row.node.path] ?: 0
+                    val n = selectedPerFolder[countKey(row.node)] ?: 0
                     count.text = if (n > 0) "✓ $n" else ""
                     v.setOnClickListener {
-                        if (!open.remove(row.node.path)) open += row.node.path
+                        if (!open.remove(row.node.key)) open += row.node.key
                         rebuild()
                     }
                 }
@@ -370,9 +420,16 @@ class PlaylistEditActivity : AppCompatActivity() {
                 is Pick.Item -> {
                     val t = row.track
                     indent(row.depth)
-                    icon.setImageResource(R.drawable.ic_music)
+                    icon.setImageResource(
+                        when {
+                            !isPhone -> R.drawable.ic_music
+                            t.localUri != null -> R.drawable.ic_phone
+                            else -> R.drawable.ic_cloud
+                        },
+                    )
                     name.text = if (t.n > 0) "${t.n}. ${t.title}" else t.title
-                    setMeta(listOf(t.artist, fmtTime(t.duration), t.quality).filter { it.isNotBlank() }.joinToString(" · "))
+                    val dur = if (t.duration > 0) fmtTime(t.duration) else ""
+                    setMeta(listOf(t.artist, dur, t.quality).filter { it.isNotBlank() }.joinToString(" · "))
                     check.visibility = View.VISIBLE
                     val on = t.id in selectedIds
                     check.isChecked = on
@@ -410,11 +467,19 @@ class PlaylistEditActivity : AppCompatActivity() {
             val v = holder.itemView
             val t = selected[position]
             v.findViewById<TextView>(R.id.index).text = "${position + 1}."
+            val source = v.findViewById<ImageView>(R.id.source)
+            source.visibility = if (isPhone) View.VISIBLE else View.GONE
+            source.setImageResource(if (t.localUri != null) R.drawable.ic_phone else R.drawable.ic_cloud)
             val name = v.findViewById<TextView>(R.id.name)
             name.text = t.title
             name.setTextColor(ContextCompat.getColor(this@PlaylistEditActivity, if (t.missing) R.color.muted else R.color.text))
             val meta = listOf(t.artist, t.album).filter { it.isNotBlank() }.joinToString(" — ")
-            v.findViewById<TextView>(R.id.meta).text = if (t.missing) "file is missing · ${t.folder}" else meta.ifBlank { t.folder }
+            v.findViewById<TextView>(R.id.meta).text = when {
+                t.missing && t.localUri != null -> "not in the local folders any more · ${t.file}"
+                t.missing -> "file is missing · ${t.folder}"
+                t.localUri != null -> meta.ifBlank { "on this phone · ${t.folder.substringAfter(':').substringAfter(':')}" }
+                else -> meta.ifBlank { t.folder }
+            }
             v.findViewById<TextView>(R.id.dur).text = fmtTime(t.duration)
             // touching the handle starts dragging at once; a long press anywhere on the row works too
             v.findViewById<ImageView>(R.id.handle).setOnTouchListener { _, e ->

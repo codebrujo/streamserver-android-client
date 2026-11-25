@@ -230,12 +230,14 @@ class MainActivity : AppCompatActivity() {
                 rows += Row.Header("Recently played", true)
                 recent.forEach { rows += Row.RecentEntry(it) }
             }
-            if (Library.loaded || LocalMedia.configured()) rows += Row.Header("Library", false)
+            val phonePlaylists = LocalPlaylists.infos().isNotEmpty()
+            if (Library.loaded || LocalMedia.configured() || phonePlaylists) rows += Row.Header("Library", false)
             if (Library.loaded) {
                 addNode(Library.videoRoot, 0, rows)
                 if (Library.musicEnabled) addNode(Library.musicRoot, 0, rows)
-                if (Library.playlistsEnabled) addPlaylists(rows)
             }
+            // server playlists need the server; playlists on the phone work without it
+            if (Library.playlistsEnabled || LocalMedia.configured() || phonePlaylists) addPlaylists(rows)
             // files on the phone: available without the server
             if (LocalMedia.configured()) {
                 addNode(LocalMedia.root, 0, rows)
@@ -351,9 +353,25 @@ class MainActivity : AppCompatActivity() {
         input.hint = "Playlist name"
         input.setSingleLine()
         val pad = (20 * resources.displayMetrics.density).toInt()
-        val box = android.widget.FrameLayout(this)
+        val box = android.widget.LinearLayout(this)
+        box.orientation = android.widget.LinearLayout.VERTICAL
         box.setPadding(pad, pad / 2, pad, 0)
         box.addView(input)
+        // where the playlist lives: on the server (shared with the web UI) or on this phone (can mix in local files)
+        val where = android.widget.RadioGroup(this)
+        val onServer = android.widget.RadioButton(this)
+        onServer.id = View.generateViewId()
+        onServer.text = "On the server — shared with the web, server tracks only"
+        val onPhone = android.widget.RadioButton(this)
+        onPhone.id = View.generateViewId()
+        onPhone.text = "On this phone — server tracks and local Audiobooks / Music files"
+        where.addView(onServer)
+        where.addView(onPhone)
+        val serverOk = Library.playlistsEnabled && Conn.base != null
+        onServer.isEnabled = serverOk
+        where.check(if (serverOk) onServer.id else onPhone.id)
+        where.setPadding(0, pad / 2, 0, 0)
+        box.addView(where)
         AlertDialog.Builder(this)
             .setTitle("New playlist")
             .setView(box)
@@ -362,7 +380,7 @@ class MainActivity : AppCompatActivity() {
                 if (name.isEmpty()) return@setPositiveButton
                 lifecycleScope.launch {
                     try {
-                        val id = Library.createPlaylist(name)
+                        val id = Library.createPlaylist(name, local = where.checkedRadioButtonId == onPhone.id)
                         openEditor(id) // straight to picking tracks, like the web UI
                     } catch (e: Exception) {
                         Toast.makeText(this@MainActivity, e.message ?: e.toString(), Toast.LENGTH_LONG).show()
@@ -381,7 +399,8 @@ class MainActivity : AppCompatActivity() {
                     Toast.makeText(this@MainActivity, "The playlist has no playable tracks", Toast.LENGTH_SHORT).show()
                     return@launch
                 }
-                Engine.playPlaylist(id, tracks, trackId, if (trackId != null) Recent.resumeAt(trackId) else 0.0)
+                val loop = LocalPlaylists.get(id)?.loop ?: false
+                Engine.playPlaylist(id, tracks, trackId, if (trackId != null) Recent.resumeAt(trackId) else 0.0, loop)
             } catch (e: Exception) {
                 Toast.makeText(this@MainActivity, e.message ?: e.toString(), Toast.LENGTH_SHORT).show()
             }
@@ -646,10 +665,11 @@ class MainActivity : AppCompatActivity() {
                     indent(row.depth)
                     chevron.visibility = View.VISIBLE
                     chevron.setImageResource(if (row.open) R.drawable.ic_chevron_down else R.drawable.ic_chevron_right)
-                    icon.setImageResource(R.drawable.ic_playlist)
+                    icon.setImageResource(if (p.local) R.drawable.ic_playlist_phone else R.drawable.ic_playlist)
                     name.text = p.name
                     if (Engine.playlistId == p.id && playingId != null) name.setTextColor(ContextCompat.getColor(this@MainActivity, R.color.accent))
-                    setMeta("${p.count} tracks · ${fmtTime(p.duration)}")
+                    val kind = if (p.local) "on this phone · " + (if (p.loop) "loop" else "linear") + " · " else ""
+                    setMeta("$kind${p.count} tracks · ${fmtTime(p.duration)}")
                     edit.visibility = View.VISIBLE
                     edit.setOnClickListener { openEditor(p.id) }
                     v.setOnClickListener { toggleKey(playlistKey(p.id)) }
@@ -662,12 +682,13 @@ class MainActivity : AppCompatActivity() {
                 is Row.PlaylistTrack -> {
                     val t = row.track
                     indent(row.depth)
-                    icon.setImageResource(R.drawable.ic_music)
+                    // where the file is: on the phone or on the server
+                    icon.setImageResource(if (t.localUri != null) R.drawable.ic_phone else R.drawable.ic_cloud)
                     name.text = "${row.index + 1}. ${t.title}"
                     count.text = fmtTime(t.duration)
                     if (t.missing) {
                         name.setTextColor(ContextCompat.getColor(this@MainActivity, R.color.muted))
-                        setMeta("file is missing · ${t.folder}")
+                        setMeta(if (t.localUri != null) "not in the local folders any more · ${t.file}" else "file is missing · ${t.folder}")
                         v.setOnClickListener {
                             Toast.makeText(this@MainActivity, "This file is no longer on the drive", Toast.LENGTH_SHORT).show()
                         }
