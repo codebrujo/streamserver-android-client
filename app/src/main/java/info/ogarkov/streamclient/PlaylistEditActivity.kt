@@ -19,7 +19,9 @@ import androidx.activity.OnBackPressedCallback
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
+import androidx.lifecycle.repeatOnLifecycle
 import androidx.recyclerview.widget.ItemTouchHelper
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
@@ -97,6 +99,24 @@ class PlaylistEditActivity : AppCompatActivity() {
         })
 
         load()
+
+        // keep the play / pause buttons of the Contents tab in step with the player
+        lifecycleScope.launch {
+            repeatOnLifecycle(Lifecycle.State.STARTED) {
+                Engine.changes.collect { if (ready) pickAdapter.notifyItemRangeChanged(0, pickAdapter.itemCount) }
+            }
+        }
+    }
+
+    /** The play button of a track: start it (its folder goes on after it), or pause / resume it. */
+    private fun playTrack(t: Track) {
+        val c = Engine.control
+        if (Engine.currentTrack()?.id == t.id) {
+            if (c.playWhenReady) c.pause() else c.play()
+            return
+        }
+        val tracks = Library.cachedTracks(t.folder) ?: return
+        Engine.playMusic(t.folder, tracks, tracks.indexOfFirst { it.id == t.id }.coerceAtLeast(0), 0.0)
     }
 
     private fun load() {
@@ -305,6 +325,7 @@ class PlaylistEditActivity : AppCompatActivity() {
             val meta = v.findViewById<TextView>(R.id.meta)
             val count = v.findViewById<TextView>(R.id.count)
             val check = v.findViewById<CheckBox>(R.id.check)
+            val play = v.findViewById<ImageButton>(R.id.play)
             val dp = resources.displayMetrics.density
             fun indent(depth: Int) = v.setPaddingRelative((8 * dp + depth * 18 * dp).toInt(), v.paddingTop, v.paddingEnd, v.paddingBottom)
             fun setMeta(text: String) {
@@ -315,6 +336,7 @@ class PlaylistEditActivity : AppCompatActivity() {
             chevron.visibility = View.INVISIBLE
             icon.visibility = View.VISIBLE
             check.visibility = View.GONE
+            play.visibility = View.GONE
             count.text = ""
             name.setTextColor(ContextCompat.getColor(this@PlaylistEditActivity, R.color.text))
 
@@ -355,6 +377,12 @@ class PlaylistEditActivity : AppCompatActivity() {
                     val on = t.id in selectedIds
                     check.isChecked = on
                     v.setOnClickListener { setIn(listOf(t), !on) }
+                    val current = Engine.currentTrack()?.id == t.id
+                    if (current) name.setTextColor(ContextCompat.getColor(this@PlaylistEditActivity, R.color.accent))
+                    play.visibility = View.VISIBLE
+                    play.setImageResource(if (current && Engine.control.playWhenReady) R.drawable.ic_pause else R.drawable.ic_play)
+                    play.contentDescription = if (current && Engine.control.playWhenReady) "Pause" else "Play"
+                    play.setOnClickListener { playTrack(t) }
                 }
                 is Pick.Info -> {
                     indent(row.depth)
