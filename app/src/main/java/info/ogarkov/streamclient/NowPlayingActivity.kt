@@ -109,17 +109,17 @@ class NowPlayingActivity : AppCompatActivity() {
         title.text = t.title
         artist.text = listOf(t.artist, t.album).filter { it.isNotBlank() }.joinToString(" — ")
         file.text = t.file
-        folder.text = t.folder
+        folder.text = if (t.localUri != null) "On this phone · ${t.folder.substringAfter(':').substringAfter(':')}" else t.folder
         play.setImageResource(if (Engine.control.playWhenReady) R.drawable.ic_pause else R.drawable.ic_play)
         tech.text = techLine(t, p.audioFormat)
 
-        if (coverFolder != t.folder) {
-            coverFolder = t.folder
+        val key = t.localUri ?: t.folder // local files carry their own cover
+        if (coverFolder != key) {
+            coverFolder = key
             cover.setImageResource(R.drawable.ic_album)
-            val f = t.folder
             lifecycleScope.launch {
-                val bmp = Covers.get(f, 800)
-                if (bmp != null && coverFolder == f) cover.setImageBitmap(bmp)
+                val bmp = Covers.forTrack(t, 800)
+                if (bmp != null && coverFolder == key) cover.setImageBitmap(bmp)
             }
         }
         updatePosition()
@@ -131,8 +131,12 @@ class NowPlayingActivity : AppCompatActivity() {
         if (t.quality.isNotBlank()) parts += t.quality
         val br = f?.let { if (it.averageBitrate > 0) it.averageBitrate else it.bitrate } ?: Format.NO_VALUE
         if (br > 0) parts += fmtBitrate(br.toDouble())
-        val delivered = if (Engine.quality(t.id) == "eco") t.deliverEco else t.deliverOrig
-        parts += if (delivered == null) "original file" else "streamed as $delivered"
+        if (t.localUri != null) {
+            parts += "file on this phone"
+        } else {
+            val delivered = if (Engine.quality(t.id) == "eco") t.deliverEco else t.deliverOrig
+            parts += if (delivered == null) "original file" else "streamed as $delivered"
+        }
         return parts.joinToString(" · ")
     }
 
