@@ -40,12 +40,12 @@ jobs:
         run: |
           chmod +x gradlew
           ./gradlew --no-daemon assembleRelease
-          cp app/build/outputs/apk/release/app-release.apk streamserver-${{ github.run_number }}.apk
+          cp app/build/outputs/apk/release/app-release.apk streamclient-${{ github.run_number }}.apk
 
       - uses: actions/upload-artifact@v4
         with:
-          name: streamserver-apk
-          path: streamserver-*.apk
+          name: streamclient-apk
+          path: streamclient-*.apk
 
       # every build of main becomes a GitHub release: the APK can be downloaded straight from the phone
       - name: Publish release
@@ -53,5 +53,5 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "v1.0.${{ github.run_number }}" streamserver-${{ github.run_number }}.apk \
-            --title "Streamserver client 1.0.${{ github.run_number }}" --notes "Build of ${GITHUB_SHA::7}" --latest
+          gh release create "v1.0.${{ github.run_number }}" streamclient-${{ github.run_number }}.apk \
+            --title "Streamclient 1.0.${{ github.run_number }}" --notes "Build of ${GITHUB_SHA::7}" --latest

@@ -39,6 +39,7 @@
             android:src="@drawable/ic_settings" />
     </LinearLayout>
 
+    <!-- running line: long status texts scroll so they can be read in full -->
     <TextView
         android:id="@+id/status"
         android:layout_width="match_parent"
@@ -46,7 +47,9 @@
         android:paddingHorizontal="16dp"
         android:paddingBottom="8dp"
         android:singleLine="true"
-        android:ellipsize="end"
+        android:ellipsize="marquee"
+        android:marqueeRepeatLimit="marquee_forever"
+        android:scrollHorizontally="true"
         android:textColor="@color/muted"
         android:textSize="13sp" />
 

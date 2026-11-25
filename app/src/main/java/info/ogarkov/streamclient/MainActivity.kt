@@ -96,6 +96,7 @@ class MainActivity : AppCompatActivity() {
 
         findViewById<ImageButton>(R.id.refresh).setOnClickListener { loadLibrary(true) }
         findViewById<ImageButton>(R.id.settings).setOnClickListener { openSettings() }
+        status.isSelected = true // a marquee only runs while the view is selected
         status.setOnClickListener { if (Conn.base == null || libraryError != null) openSettings() }
         search.addTextChangedListener(object : TextWatcher {
             override fun beforeTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
@@ -158,7 +159,9 @@ class MainActivity : AppCompatActivity() {
             Library.loaded -> " · ${Library.videos.size} videos" + if (Library.musicEnabled) ", ${Library.musicFolders.size} albums" else ""
             else -> ""
         }
-        status.text = text + extra
+        val full = text + extra
+        if (status.text.toString() != full) status.text = full // re-setting the same text would restart the scroll
+        status.isSelected = true
         status.setTextColor(ContextCompat.getColor(this, color))
     }
 
