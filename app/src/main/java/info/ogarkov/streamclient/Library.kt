@@ -126,8 +126,16 @@ data class RecentItem(
     val at: Long,
 )
 
-/** A playlist as listed by GET /api/playlists. */
-data class PlaylistInfo(val id: String, val name: String, val count: Int, val duration: Double, val cover: String?)
+/** A playlist: from GET /api/playlists, or kept on the phone ([local], see LocalPlaylists). */
+data class PlaylistInfo(
+    val id: String,
+    val name: String,
+    val count: Int,
+    val duration: Double,
+    val cover: String?,
+    val local: Boolean = false,
+    val loop: Boolean = false,
+)
 
 /** A folder of the browse tree. Keys: "v:<path>" for video, "m:<path>" for music; roots are "v:" and "m:". */
 class Node(val key: String, val name: String, val path: String, val music: Boolean) {
@@ -160,8 +168,11 @@ object Library {
     // playlists (/api/playlists, shared with the web UI)
     @Volatile var playlistsEnabled = false
         private set
-    @Volatile var playlists: List<PlaylistInfo> = emptyList()
-        private set
+    @Volatile private var serverPlaylists: List<PlaylistInfo> = emptyList()
+
+    /** server playlists and the phone's own ones, by name */
+    val playlists: List<PlaylistInfo>
+        get() = (serverPlaylists + LocalPlaylists.infos()).sortedWith { a, b -> natural.compare(a.name, b.name) }
     private val playlistTracks = HashMap<String, List<Track>>()
     private var videoOrder: List<Video> = emptyList()
     private var musicOrder: List<String> = emptyList()
@@ -202,7 +213,7 @@ object Library {
         return list
     }
 
-    private fun parseTrack(t: JSONObject, folder: String): Track {
+    fun parseTrack(t: JSONObject, folder: String): Track {
         val d = t.optJSONObject("deliver")
         return Track(
             id = t.getString("id"),
@@ -217,6 +228,8 @@ object Library {
             deliverEco = optLabel(d, "eco"),
             folder = folder,
             missing = t.optBoolean("missing"),
+            localUri = t.optString("localUri").ifEmpty { null },
+            localName = t.optString("localName").ifEmpty { null },
         )
     }
 
@@ -232,6 +245,11 @@ object Library {
         .put("format", t.format)
         .put("quality", t.quality)
         .put("deliver", JSONObject().put("orig", t.deliverOrig ?: JSONObject.NULL).put("eco", t.deliverEco ?: JSONObject.NULL))
+        .also { o ->
+            // only in playlists kept on the phone (the server drops unknown fields anyway)
+            t.localUri?.let { o.put("localUri", it) }
+            t.localName?.let { o.put("localName", it) }
+        }
 
     // ---------- playlists ----------
 
@@ -239,27 +257,32 @@ object Library {
     suspend fun loadPlaylistList() {
         try {
             val arr = JSONArray(Api.text(Api.url("/api/playlists")))
-            playlists = (0 until arr.length()).map {
+            serverPlaylists = (0 until arr.length()).map {
                 val o = arr.getJSONObject(it)
                 PlaylistInfo(o.getString("id"), o.optString("name"), o.optInt("count"), o.optDouble("duration", 0.0),
                     if (o.isNull("cover")) null else o.optString("cover"))
-            }.sortedWith { a, b -> natural.compare(a.name, b.name) }
+            }
             playlistsEnabled = true
         } catch (e: AuthException) {
             throw e
         } catch (e: Exception) {
-            // an older server without playlists
-            playlists = emptyList()
+            // an older server without playlists, or no connection
+            serverPlaylists = emptyList()
             playlistsEnabled = false
         }
         synchronized(playlistTracks) { playlistTracks.clear() }
         bump()
     }
 
-    fun cachedPlaylist(id: String): List<Track>? = synchronized(playlistTracks) { playlistTracks[id] }
+    fun cachedPlaylist(id: String): List<Track>? =
+        if (LocalPlaylists.isLocal(id)) LocalPlaylists.tracks(id) else synchronized(playlistTracks) { playlistTracks[id] }
 
     /** Name and tracks of a playlist (tracks whose files are gone are marked [Track.missing]). */
     suspend fun playlist(id: String): Pair<String, List<Track>> {
+        if (LocalPlaylists.isLocal(id)) {
+            val p = LocalPlaylists.get(id) ?: throw java.io.IOException("Playlist not found")
+            return p.name to (LocalPlaylists.tracks(id) ?: emptyList())
+        }
         val o = JSONObject(Api.text(Api.url("/api/playlists/$id")))
         val arr = o.optJSONArray("tracks") ?: JSONArray()
         val list = (0 until arr.length()).map {
@@ -270,13 +293,19 @@ object Library {
         return o.optString("name") to list
     }
 
-    suspend fun createPlaylist(name: String): String {
+    suspend fun createPlaylist(name: String, local: Boolean): String {
+        if (local) return LocalPlaylists.create(name).also { bump() }
         val o = JSONObject(Api.send("POST", Api.url("/api/playlists"), JSONObject().put("name", name)))
         loadPlaylistList()
         return o.getString("id")
     }
 
-    suspend fun savePlaylist(id: String, name: String, list: List<Track>) {
+    suspend fun savePlaylist(id: String, name: String, list: List<Track>, loop: Boolean) {
+        if (LocalPlaylists.isLocal(id)) {
+            LocalPlaylists.update(id, name, loop, list)
+            bump()
+            return
+        }
         val arr = JSONArray()
         list.forEach { arr.put(trackJson(it)) }
         Api.send("PUT", Api.url("/api/playlists/$id"), JSONObject().put("name", name).put("tracks", arr))
@@ -284,6 +313,11 @@ object Library {
     }
 
     suspend fun deletePlaylist(id: String) {
+        if (LocalPlaylists.isLocal(id)) {
+            LocalPlaylists.delete(id)
+            bump()
+            return
+        }
         Api.send("DELETE", Api.url("/api/playlists/$id"), null)
         loadPlaylistList()
     }

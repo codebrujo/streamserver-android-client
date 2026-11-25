@@ -30,6 +30,12 @@ the home video and music library on mediaserver.
   *Save* stores the changes on the server; the trash icon deletes the playlist (the files stay on the drive).
   Tracks whose files are gone are shown greyed and skipped when playing.
 
+- **Playlists on the phone**: *New playlist* asks where to keep it. *On the server* is shared with the web and
+  holds server tracks. *On this phone* is stored in the app and can mix server tracks with files from the local
+  Audiobooks and Music folders; it also works offline with its local files. In the editor, the *Contents* tab
+  shows *Music on the server* next to *Audiobooks / Music on this phone*. Phone playlists also have a
+  **Play order**: *Linear* stops after the last track, *Loop* starts over from the first. Their tracks show
+  where the file is: phone icon = local file, cloud icon = server.
 - **Local media**: folders on the phone for audiobooks, music and films. Set them in Settings → *Local media*
   with the system folder picker (Storage Access Framework, so no "all files" permission; access survives
   restarts). A scan (*Scan local folders* in Settings, or the rescan button) walks them and shows the files in

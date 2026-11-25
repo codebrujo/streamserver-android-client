@@ -46,6 +46,7 @@ class App : Application() {
         Prefs.init(this)
         Conn.init(this)
         LocalMedia.init(this)
+        LocalPlaylists.init(this)
         Engine.init(this)
     }
 }
@@ -146,15 +147,18 @@ object Engine {
     }
 
     fun playMusic(folder: String, tracks: List<Track>, index: Int, startSec: Double) {
+        player.repeatMode = Player.REPEAT_MODE_OFF
         continueFolders = true
         playlistId = null
         startMusic(folder, tracks, index, startSec)
     }
 
     /** Play a playlist from the track with [trackId] (or from the start); files that are gone are skipped. */
-    fun playPlaylist(id: String, tracks: List<Track>, trackId: String?, startSec: Double) {
+    fun playPlaylist(id: String, tracks: List<Track>, trackId: String?, startSec: Double, loop: Boolean = false) {
         val list = tracks.filter { !it.missing }
         if (list.isEmpty()) return
+        // play order: linear stops after the last track, loop starts over from the first
+        player.repeatMode = if (loop) Player.REPEAT_MODE_ALL else Player.REPEAT_MODE_OFF
         continueFolders = false
         playlistId = id
         startMusic(list.first().folder, list, list.indexOfFirst { it.id == trackId }.coerceAtLeast(0), startSec)
@@ -173,6 +177,7 @@ object Engine {
 
     /** Files from the local folders: one list (a whole category in tree order), no server folders after it. */
     fun playLocal(tracks: List<Track>, index: Int, startSec: Double) {
+        player.repeatMode = Player.REPEAT_MODE_OFF
         continueFolders = false
         playlistId = null
         startMusic(tracks.getOrNull(index)?.folder ?: "", tracks, index, startSec)
@@ -201,6 +206,7 @@ object Engine {
     /** a video takes over the player */
     fun startVideo() {
         if (audioMode) saveAudioPosition()
+        player.repeatMode = Player.REPEAT_MODE_OFF
         audioMode = false
         control.stop()
         player.clearMediaItems()
