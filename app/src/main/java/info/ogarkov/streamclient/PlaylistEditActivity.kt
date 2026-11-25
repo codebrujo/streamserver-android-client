@@ -73,7 +73,8 @@ class PlaylistEditActivity : AppCompatActivity() {
         playlistId = intent.getStringExtra("id") ?: return finish()
         isPhone = LocalPlaylists.isLocal(playlistId)
         playOrder = findViewById(R.id.playOrder)
-        findViewById<View>(R.id.orderRow).visibility = if (isPhone) View.VISIBLE else View.GONE
+        // play order: phone playlists keep it in the app, server playlists on the server (v1.4+)
+        findViewById<View>(R.id.orderRow).visibility = View.VISIBLE
         nameField = findViewById(R.id.name)
         contents = findViewById(R.id.contents)
         order = findViewById(R.id.order)
@@ -141,7 +142,7 @@ class PlaylistEditActivity : AppCompatActivity() {
                 }
                 val (name, tracks) = Library.playlist(playlistId)
                 savedName = name
-                savedLoop = LocalPlaylists.get(playlistId)?.loop ?: false
+                savedLoop = Library.playlistLoop(playlistId)
                 playOrder.check(if (savedLoop) R.id.playLoop else R.id.playLinear)
                 savedIds = tracks.map { it.id }
                 nameField.setText(name)
@@ -200,7 +201,7 @@ class PlaylistEditActivity : AppCompatActivity() {
     private fun isDirty(): Boolean =
         ready && (nameField.text.toString().trim() != savedName || selected.map { it.id } != savedIds || loop() != savedLoop)
 
-    private fun loop() = isPhone && playOrder.checkedRadioButtonId == R.id.playLoop
+    private fun loop() = playOrder.checkedRadioButtonId == R.id.playLoop
 
     private fun setIn(tracks: List<Track>, on: Boolean) {
         if (on) {

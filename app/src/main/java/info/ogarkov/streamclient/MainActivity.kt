@@ -399,7 +399,7 @@ class MainActivity : AppCompatActivity() {
                     Toast.makeText(this@MainActivity, "The playlist has no playable tracks", Toast.LENGTH_SHORT).show()
                     return@launch
                 }
-                val loop = LocalPlaylists.get(id)?.loop ?: false
+                val loop = Library.playlistLoop(id)
                 Engine.playPlaylist(id, tracks, trackId, if (trackId != null) Recent.resumeAt(trackId) else 0.0, loop)
             } catch (e: Exception) {
                 Toast.makeText(this@MainActivity, e.message ?: e.toString(), Toast.LENGTH_SHORT).show()
@@ -668,8 +668,9 @@ class MainActivity : AppCompatActivity() {
                     icon.setImageResource(if (p.local) R.drawable.ic_playlist_phone else R.drawable.ic_playlist)
                     name.text = p.name
                     if (Engine.playlistId == p.id && playingId != null) name.setTextColor(ContextCompat.getColor(this@MainActivity, R.color.accent))
-                    val kind = if (p.local) "on this phone · " + (if (p.loop) "loop" else "linear") + " · " else ""
-                    setMeta("$kind${p.count} tracks · ${fmtTime(p.duration)}")
+                    val where = if (p.local) "on this phone · " else ""
+                    val order = if (Library.playlistLoop(p.id)) "🔁 loop · " else ""
+                    setMeta("$where$order${p.count} tracks · ${fmtTime(p.duration)}")
                     edit.visibility = View.VISIBLE
                     edit.setOnClickListener { openEditor(p.id) }
                     v.setOnClickListener { toggleKey(playlistKey(p.id)) }

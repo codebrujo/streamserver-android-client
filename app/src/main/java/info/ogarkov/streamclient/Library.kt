@@ -260,7 +260,9 @@ object Library {
             serverPlaylists = (0 until arr.length()).map {
                 val o = arr.getJSONObject(it)
                 PlaylistInfo(o.getString("id"), o.optString("name"), o.optInt("count"), o.optDouble("duration", 0.0),
-                    if (o.isNull("cover")) null else o.optString("cover"))
+                    if (o.isNull("cover")) null else o.optString("cover"),
+                    // play order (server v1.4+; older servers have none = linear)
+                    loop = o.optString("order") == "loop")
             }
             playlistsEnabled = true
         } catch (e: AuthException) {
@@ -290,8 +292,16 @@ object Library {
             parseTrack(t, t.optString("folder"))
         }
         synchronized(playlistTracks) { playlistTracks[id] = list }
+        serverLoop[id] = o.optString("order") == "loop"
         return o.optString("name") to list
     }
+
+    private val serverLoop = java.util.concurrent.ConcurrentHashMap<String, Boolean>()
+
+    /** Play order of a playlist: true = loop (start over after the last track), false = linear. */
+    fun playlistLoop(id: String): Boolean =
+        if (LocalPlaylists.isLocal(id)) LocalPlaylists.get(id)?.loop ?: false
+        else serverLoop[id] ?: serverPlaylists.firstOrNull { it.id == id }?.loop ?: false
 
     suspend fun createPlaylist(name: String, local: Boolean): String {
         if (local) return LocalPlaylists.create(name).also { bump() }
@@ -308,7 +318,9 @@ object Library {
         }
         val arr = JSONArray()
         list.forEach { arr.put(trackJson(it)) }
-        Api.send("PUT", Api.url("/api/playlists/$id"), JSONObject().put("name", name).put("tracks", arr))
+        Api.send("PUT", Api.url("/api/playlists/$id"),
+            JSONObject().put("name", name).put("order", if (loop) "loop" else "linear").put("tracks", arr))
+        serverLoop[id] = loop
         loadPlaylistList()
     }
 
