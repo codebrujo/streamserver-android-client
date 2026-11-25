@@ -92,5 +92,44 @@
             android:layout_height="wrap_content"
             android:layout_marginTop="12dp"
             android:text="Save and connect" />
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="32dp"
+            android:text="Local media"
+            android:textColor="@color/text"
+            android:textSize="18sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:text="Folders on this phone. Their files appear under Local media and play without the server."
+            android:textColor="@color/muted"
+            android:textSize="13sp" />
+
+        <!-- one row per category, filled in code -->
+        <LinearLayout
+            android:id="@+id/localFolders"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical" />
+
+        <Button
+            android:id="@+id/scan"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:text="Scan local folders" />
+
+        <TextView
+            android:id="@+id/scanResult"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:textColor="@color/muted"
+            android:textSize="13sp" />
     </LinearLayout>
 </ScrollView>

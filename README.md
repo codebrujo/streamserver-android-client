@@ -30,6 +30,13 @@ the home video and music library on mediaserver.
   *Save* stores the changes on the server; the trash icon deletes the playlist (the files stay on the drive).
   Tracks whose files are gone are shown greyed and skipped when playing.
 
+- **Local media**: folders on the phone for audiobooks, music and films. Set them in Settings → *Local media*
+  with the system folder picker (Storage Access Framework, so no "all files" permission; access survives
+  restarts). A scan (*Scan local folders* in Settings, or the rescan button) walks them and shows the files in
+  the top-level *Local media* folder: Audiobooks / Music / Films with their subfolders. They play without the
+  server, continuously (file after file, folder after folder), and are included in search and *Recently
+  played* (handy for audiobooks). Covers come from the pictures embedded in the files.
+
 Long-press a music folder to play it from the first track.
 
 ## How video is played

@@ -48,6 +48,7 @@ sealed class Row {
     data class MusicFile(val folder: String, val file: String) : Row()
     data class RecentEntry(val item: RecentItem) : Row()
     data class Info(val text: String, val depth: Int, val retryFolder: String?) : Row()
+    data class LocalFile(val item: LocalItem, val depth: Int, val showPath: Boolean) : Row()
     data class PlaylistsRoot(val open: Boolean) : Row()
     data class NewPlaylist(val depth: Int) : Row()
     data class PlaylistEntry(val info: PlaylistInfo, val depth: Int, val open: Boolean) : Row()
@@ -55,6 +56,7 @@ sealed class Row {
 }
 
 private const val PLAYLISTS_KEY = "p:"
+private const val LOCAL_SCAN = "local-scan"
 private fun playlistKey(id: String) = "pl:$id"
 
 class MainActivity : AppCompatActivity() {
@@ -103,7 +105,10 @@ class MainActivity : AppCompatActivity() {
         list.layoutManager = LinearLayoutManager(this)
         list.adapter = adapter
 
-        findViewById<ImageButton>(R.id.refresh).setOnClickListener { loadLibrary(true) }
+        findViewById<ImageButton>(R.id.refresh).setOnClickListener {
+            if (LocalMedia.configured()) scanLocal()
+            if (Conn.base != null || !LocalMedia.configured()) loadLibrary(true)
+        }
         findViewById<ImageButton>(R.id.settings).setOnClickListener { openSettings() }
         status.isSelected = true // a marquee only runs while the view is selected
         status.setOnClickListener { if (Conn.base == null || libraryError != null) openSettings() }
@@ -174,6 +179,16 @@ class MainActivity : AppCompatActivity() {
         status.setTextColor(ContextCompat.getColor(this, color))
     }
 
+    private fun scanLocal() {
+        if (LocalMedia.scanning) return
+        render()
+        lifecycleScope.launch {
+            val n = try { LocalMedia.scan() } catch (e: Exception) { -1 }
+            Toast.makeText(this@MainActivity, if (n >= 0) "Local media: $n files" else "Local folders could not be scanned", Toast.LENGTH_SHORT).show()
+            render()
+        }
+    }
+
     private fun loadLibrary(refresh: Boolean) {
         if (libraryLoading) return
         if (Conn.base == null) {
@@ -215,11 +230,18 @@ class MainActivity : AppCompatActivity() {
                 rows += Row.Header("Recently played", true)
                 recent.forEach { rows += Row.RecentEntry(it) }
             }
+            if (Library.loaded || LocalMedia.configured()) rows += Row.Header("Library", false)
             if (Library.loaded) {
-                rows += Row.Header("Library", false)
                 addNode(Library.videoRoot, 0, rows)
                 if (Library.musicEnabled) addNode(Library.musicRoot, 0, rows)
                 if (Library.playlistsEnabled) addPlaylists(rows)
+            }
+            // files on the phone: available without the server
+            if (LocalMedia.configured()) {
+                addNode(LocalMedia.root, 0, rows)
+                if (LocalMedia.root.key in expanded && LocalMedia.items.isEmpty()) {
+                    rows += Row.Info(if (LocalMedia.scanning) "Scanning…" else "Nothing found yet — tap to scan the local folders", 1, LOCAL_SCAN)
+                }
             }
         }
         adapter.submit(rows)
@@ -233,9 +255,14 @@ class MainActivity : AppCompatActivity() {
             for (file in f.files) if (file.lowercase().contains(q)) music += Row.MusicFile(f.path, file)
             if (music.size >= limit) break
         }
-        if (videos.isEmpty() && music.isEmpty()) {
-            rows += Row.Info(if (Library.loaded) "Nothing found" else "The library is not loaded yet", 0, null)
+        val local = LocalMedia.items.filter { it.name.lowercase().contains(q) }
+        if (videos.isEmpty() && music.isEmpty() && local.isEmpty()) {
+            rows += Row.Info(if (Library.loaded || LocalMedia.items.isNotEmpty()) "Nothing found" else "The library is not loaded yet", 0, null)
             return
+        }
+        if (local.isNotEmpty()) {
+            rows += Row.Header("Local media · ${local.size}", false)
+            local.take(limit).forEach { rows += Row.LocalFile(it, 0, true) }
         }
         if (videos.isNotEmpty()) {
             rows += Row.Header("Video · ${videos.size}", false)
@@ -252,7 +279,9 @@ class MainActivity : AppCompatActivity() {
         rows += Row.Folder(n, depth, open)
         if (!open) return
         n.folders.forEach { addNode(it, depth + 1, rows) }
-        if (!n.music) {
+        if (n.key.startsWith("l:")) {
+            n.localFiles.forEach { rows += Row.LocalFile(it, depth + 1, false) }
+        } else if (!n.music) {
             n.videos.forEach { rows += Row.VideoFile(it, depth + 1, false) }
         } else if (n.hasTracks) {
             val tracks = Library.cachedTracks(n.path)
@@ -404,6 +433,15 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun openRecent(r: RecentItem) {
+        if (LocalMedia.isLocal(r.id)) {
+            val item = LocalMedia.item(r.id)
+            when {
+                item == null -> Toast.makeText(this, "This file is no longer in the local folders", Toast.LENGTH_SHORT).show()
+                item.isVideo -> openVideo(item.uri)
+                else -> LocalMedia.playAudio(item, Recent.resumeAt(r.id))
+            }
+            return
+        }
         if (r.kind == "video") {
             if (Library.loaded && Library.video(r.id) == null) {
                 Toast.makeText(this, "This video is no longer on the server", Toast.LENGTH_SHORT).show()
@@ -425,13 +463,13 @@ class MainActivity : AppCompatActivity() {
         miniTitle.text = t.title
         miniSub.text = listOf(t.artist, t.album).filter { it.isNotBlank() }.joinToString(" — ")
         miniPlay.setImageResource(if (Engine.control.playWhenReady) R.drawable.ic_pause else R.drawable.ic_play)
-        if (miniFolder != t.folder) {
-            miniFolder = t.folder
+        val key = t.localUri ?: t.folder // local files carry their own cover
+        if (miniFolder != key) {
+            miniFolder = key
             miniCover.setImageResource(R.drawable.ic_album)
-            val folder = t.folder
             lifecycleScope.launch {
-                val bmp = Covers.get(folder, 200)
-                if (bmp != null && miniFolder == folder) miniCover.setImageBitmap(bmp)
+                val bmp = Covers.forTrack(t, 200)
+                if (bmp != null && miniFolder == key) miniCover.setImageBitmap(bmp)
             }
         }
     }
@@ -493,7 +531,16 @@ class MainActivity : AppCompatActivity() {
                     indent(row.depth)
                     chevron.visibility = View.VISIBLE
                     chevron.setImageResource(if (row.open) R.drawable.ic_chevron_down else R.drawable.ic_chevron_right)
-                    icon.setImageResource(if (row.depth == 0) (if (n.music) R.drawable.ic_music else R.drawable.ic_movie) else R.drawable.ic_folder)
+                    icon.setImageResource(
+                        when {
+                            n.key == "l:" -> R.drawable.ic_phone
+                            n.key == "l:a:" -> R.drawable.ic_book
+                            n.key == "l:m:" -> R.drawable.ic_music
+                            n.key == "l:v:" -> R.drawable.ic_movie
+                            row.depth == 0 -> if (n.music) R.drawable.ic_music else R.drawable.ic_movie
+                            else -> R.drawable.ic_folder
+                        },
+                    )
                     name.text = n.name
                     setMeta("")
                     count.text = n.count.toString()
@@ -553,9 +600,27 @@ class MainActivity : AppCompatActivity() {
                     v.setOnClickListener {
                         when {
                             retry == null -> {}
+                            retry == LOCAL_SCAN -> scanLocal()
                             retry.startsWith("pl:") -> loadPlaylist(retry.removePrefix("pl:"))
                             else -> loadTracks(retry)
                         }
+                    }
+                }
+                is Row.LocalFile -> {
+                    val it = row.item
+                    indent(row.depth)
+                    icon.setImageResource(if (it.isVideo) R.drawable.ic_movie else R.drawable.ic_music)
+                    name.text = it.name
+                    if (it.uri == playingId) name.setTextColor(ContextCompat.getColor(this@MainActivity, R.color.accent))
+                    val where = if (row.showPath) listOf(LocalMedia.CATEGORIES.first { c -> c.first == it.cat }.second, it.folder).filter { s -> s.isNotEmpty() }.joinToString("/") else ""
+                    setMeta(listOf(where, fmtSize(it.size)).filter { s -> s.isNotEmpty() }.joinToString(" · "))
+                    val r = Recent.get(it.uri)
+                    if (r != null && r.dur > 0 && r.pos > 5) {
+                        bar.visibility = View.VISIBLE
+                        bar.progress = ((r.pos / r.dur) * 1000).toInt().coerceIn(0, 1000)
+                    }
+                    v.setOnClickListener { _ ->
+                        if (it.isVideo) openVideo(it.uri) else LocalMedia.playAudio(it, Recent.resumeAt(it.uri))
                     }
                 }
                 is Row.PlaylistsRoot -> {

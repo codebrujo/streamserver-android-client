@@ -20,6 +20,7 @@ import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DataSourceBitmapLoader
+import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.datasource.okhttp.OkHttpDataSource
 import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
@@ -44,6 +45,7 @@ class App : Application() {
         super.onCreate()
         Prefs.init(this)
         Conn.init(this)
+        LocalMedia.init(this)
         Engine.init(this)
     }
 }
@@ -94,7 +96,8 @@ object Engine {
         player = ExoPlayer.Builder(ctx)
             .setRenderersFactory(DefaultRenderersFactory(ctx).setEnableDecoderFallback(true))
             .setMediaSourceFactory(
-                DefaultMediaSourceFactory(dataSourceFactory)
+                // http(s) through OkHttp (address switching, login); content:// = files in the local folders
+                DefaultMediaSourceFactory(DefaultDataSource.Factory(ctx, dataSourceFactory))
                     // ride out a switch between the local and the global address
                     .setLoadErrorHandlingPolicy(DefaultLoadErrorHandlingPolicy(12)),
             )
@@ -121,20 +124,24 @@ object Engine {
     // ---------- music ----------
 
     private fun item(t: Track): MediaItem {
-        val q = if (Conn.isLocal) "orig" else "eco"
         trackById[t.id] = t
-        qById[t.id] = q
         val meta = MediaMetadata.Builder()
             .setTitle(t.title)
             .setArtist(t.artist.ifBlank { null })
             .setAlbumTitle(t.album.ifBlank { null })
-            .setArtworkUri(Uri.parse(Covers.url(t.folder, 600)))
             .setMediaType(MediaMetadata.MEDIA_TYPE_MUSIC)
-            .build()
+        val local = t.localUri
+        if (local != null) {
+            // a file on the phone: ExoPlayer reads its embedded cover itself
+            return MediaItem.Builder().setMediaId(t.id).setUri(local).setMediaMetadata(meta.build()).build()
+        }
+        val q = if (Conn.isLocal) "orig" else "eco"
+        qById[t.id] = q
+        meta.setArtworkUri(Uri.parse(Covers.url(t.folder, 600)))
         return MediaItem.Builder()
             .setMediaId(t.id)
             .setUri(Api.url("/api/music/stream/${t.id}", "q" to q))
-            .setMediaMetadata(meta)
+            .setMediaMetadata(meta.build())
             .build()
     }
 
@@ -162,6 +169,13 @@ object Engine {
         player.setMediaItems(tracks.map { item(it) }, index.coerceIn(0, tracks.size - 1), (startSec * 1000).toLong())
         player.prepare()
         control.play()
+    }
+
+    /** Files from the local folders: one list (a whole category in tree order), no server folders after it. */
+    fun playLocal(tracks: List<Track>, index: Int, startSec: Double) {
+        continueFolders = false
+        playlistId = null
+        startMusic(tracks.getOrNull(index)?.folder ?: "", tracks, index, startSec)
     }
 
     /** Start playing at the track with [trackId] in [folder] (or the first track of [file]). */
@@ -195,18 +209,22 @@ object Engine {
 
     private fun saveAudioPosition() {
         val t = currentTrack() ?: return
-        Recent.position(t.id, player.currentPosition / 1000.0, t.duration)
+        Recent.position(t.id, player.currentPosition / 1000.0, durationOf(t))
     }
+
+    /** local files have no duration until they are opened */
+    private fun durationOf(t: Track): Double =
+        if (t.duration > 0) t.duration else if (player.duration > 0) player.duration / 1000.0 else 0.0
 
     private fun onTrackStarted() {
         val t = currentTrack() ?: return
         Recent.started(RecentItem("audio", t.id, t.title, listOf(t.artist, t.album).filter { it.isNotBlank() }.joinToString(" — "),
-            t.folder, player.currentPosition / 1000.0, t.duration, System.currentTimeMillis()))
+            t.folder, player.currentPosition / 1000.0, durationOf(t), System.currentTimeMillis()))
         // let the server convert / cut the next track in advance
         val next = player.currentMediaItemIndex + 1
         if (next < player.mediaItemCount) {
             val id = player.getMediaItemAt(next).mediaId
-            Api.ping(Api.url("/api/music/prepare/$id", "q" to quality(id)))
+            if (track(id)?.localUri == null) Api.ping(Api.url("/api/music/prepare/$id", "q" to quality(id)))
         }
         appendIfNeeded()
     }
@@ -330,6 +348,29 @@ object Covers {
     fun url(folder: String, size: Int) = Api.url("/api/music/cover", "path" to folder, "s" to size.toString())
 
     fun cached(folder: String, size: Int): Bitmap? = cache.get("$size:$folder")
+
+    /** Cover of a track: the server's folder cover, or the picture embedded in a local file. */
+    suspend fun forTrack(t: Track, size: Int): Bitmap? {
+        val local = t.localUri ?: return get(t.folder, size)
+        val key = "local:$local"
+        cache.get(key)?.let { return it }
+        if (synchronized(missing) { key in missing }) return null
+        val bmp = withContext(Dispatchers.IO) {
+            try {
+                val r = android.media.MediaMetadataRetriever()
+                try {
+                    r.setDataSource(LocalMedia.context, Uri.parse(local))
+                    r.embeddedPicture?.let { BitmapFactory.decodeByteArray(it, 0, it.size) }
+                } finally {
+                    r.release()
+                }
+            } catch (e: Exception) {
+                null
+            }
+        }
+        if (bmp != null) cache.put(key, bmp) else synchronized(missing) { missing += key }
+        return bmp
+    }
 
     suspend fun get(folder: String, size: Int): Bitmap? {
         val key = "$size:$folder"

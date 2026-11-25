@@ -43,6 +43,10 @@ object Prefs {
         get() = sp.getStringSet("expanded", emptySet())!!.toSet()
         set(v) = sp.edit().putStringSet("expanded", v).apply()
 
+    // local media folders (tree uris from the system folder picker), per category a / m / v
+    fun localFolder(cat: String): String = str("localFolder_$cat", "")
+    fun setLocalFolder(cat: String, uri: String) = put("localFolder_$cat", uri)
+
     var recentJson: String
         get() = str("recent", "[]")
         set(v) = put("recent", v)
@@ -69,9 +73,12 @@ data class Track(
     val deliverEco: String?,
     val folder: String,
     val missing: Boolean = false, // in a playlist, but the file is gone from the drive
+    val localUri: String? = null, // a file in the phone's local folders (content:// uri)
+    val localName: String? = null,
 ) {
     /** Track ids are base64url JSON {f: "relative/path.flac", s, e} (s/e = CUE track bounds). */
     val file: String by lazy {
+        if (localName != null) return@lazy localName
         try {
             val json = String(Base64.decode(id, Base64.URL_SAFE or Base64.NO_PADDING or Base64.NO_WRAP), Charsets.UTF_8)
             JSONObject(json).optString("f").substringAfterLast('/')
@@ -126,6 +133,7 @@ data class PlaylistInfo(val id: String, val name: String, val count: Int, val du
 class Node(val key: String, val name: String, val path: String, val music: Boolean) {
     val folders = ArrayList<Node>()
     val videos = ArrayList<Video>()
+    val localFiles = ArrayList<LocalItem>() // "Local media" tree only
     var hasTracks = false // music: this folder itself contains audio
     var count = 0 // files below, for display
 }

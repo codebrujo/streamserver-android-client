@@ -214,11 +214,14 @@ class VideoActivity : AppCompatActivity() {
         showMessage("Loading…")
         loadJob = lifecycleScope.launch {
             try {
-                if (!Library.loaded) Library.load(false)
-                val v = Library.video(id) ?: throw Exception("Video not found — rescan the library")
+                val local = LocalMedia.video(id)
+                if (local == null && !Library.loaded) Library.load(false)
+                val v = local ?: Library.video(id) ?: throw Exception("Video not found — rescan the library")
                 video = v
                 info = null
-                info = try { probe(id) } catch (e: Exception) { null }
+                // a file on the phone has nothing on the server to ask about
+                if (local == null) info = try { probe(id) } catch (e: Exception) { null }
+                findViewById<View>(R.id.toServer).visibility = if (local == null) View.VISIBLE else View.GONE
                 Recent.started(RecentItem("video", v.id, v.title, v.file, v.folder, 0.0, info?.duration ?: 0.0, System.currentTimeMillis()))
                 val codec = info?.video?.codec ?: ""
                 if (codec in SERVER_VIDEO) {
@@ -286,6 +289,7 @@ class VideoActivity : AppCompatActivity() {
         if (d > 0 && v.size > 0) parts += fmtBitrate(v.size * 8 / d)
         decoderName?.let { parts += "decoder ${it.removePrefix("c2.").removePrefix("OMX.")}" + if (firstFrame) "" else " (no picture yet)" }
         parts += when {
+            isLocal() -> "file on this phone"
             mode == Mode.DIRECT -> "original file"
             info?.mode(audioIdx) == "audio" -> "server: audio transcoding"
             else -> "server: video transcoding"
@@ -297,7 +301,7 @@ class VideoActivity : AppCompatActivity() {
         val text = infoText()
         infoText.text = text
         streamTitle.text = text
-        val hasNext = video?.let { Library.nextVideo(it.id) } != null
+        val hasNext = video?.let { nextOf(it) } != null
         val vis = if (hasNext) View.VISIBLE else View.GONE
         findViewById<View>(R.id.next).visibility = vis
         findViewById<View>(R.id.streamNext).visibility = vis
@@ -337,7 +341,7 @@ class VideoActivity : AppCompatActivity() {
         player.trackSelectionParameters = params.build()
 
         val item = MediaItem.Builder()
-            .setUri(Api.url("/api/stream/${v.id}"))
+            .setUri(if (isLocal()) v.id else Api.url("/api/stream/${v.id}"))
             .setMediaMetadata(MediaMetadata.Builder().setTitle(v.title).setMediaType(MediaMetadata.MEDIA_TYPE_VIDEO).build())
             .setSubtitleConfigurations(subs)
             .build()
@@ -406,7 +410,18 @@ class VideoActivity : AppCompatActivity() {
 
     // ---------- server stream ----------
 
+    private fun isLocal() = video?.let { LocalMedia.isLocal(it.id) } == true
+
+    /** next video: in the server's tree, or among the local films */
+    private fun nextOf(v: Video): Video? = if (LocalMedia.isLocal(v.id)) LocalMedia.nextVideo(v.id) else Library.nextVideo(v.id)
+
     private fun switchToStream(atSec: Double) {
+        if (isLocal()) {
+            // the server can't convert a file that only exists on the phone
+            badge.visibility = View.GONE
+            showMessage("This phone can't play this file (no decoder for its video or audio)")
+            return
+        }
         val inf = info
         if (inf == null) {
             showMessage("Can't play this file")
@@ -604,7 +619,7 @@ class VideoActivity : AppCompatActivity() {
     /** "Next" button: the next file of the folder (after the last one: the next folder). */
     private fun skipToNext() {
         val v = video ?: return
-        val next = Library.nextVideo(v.id)
+        val next = nextOf(v)
         if (next == null) {
             Toast.makeText(this, "This is the last video", Toast.LENGTH_SHORT).show()
             return
@@ -620,7 +635,7 @@ class VideoActivity : AppCompatActivity() {
     private fun playNext() {
         val v = video ?: return finish()
         Recent.position(v.id, durationSec(), durationSec())
-        val next = Library.nextVideo(v.id)
+        val next = nextOf(v)
         if (next == null) {
             finish()
             return
