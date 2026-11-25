@@ -5,6 +5,7 @@ import android.content.Intent
 import android.net.Uri
 import android.provider.DocumentsContract
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
@@ -45,6 +46,22 @@ object LocalMedia {
 
     private val file get() = File(context.filesDir, "local_media.json")
 
+    // length of local audio files in seconds (the folder scan can't see it): read in the background
+    // after a scan, also learned while playing; kept with the scan result
+    private val durations = java.util.concurrent.ConcurrentHashMap<String, Double>()
+    private val scope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + Dispatchers.IO)
+    @Volatile private var filling = false
+
+    fun duration(uri: String): Double = durations[uri] ?: 0.0
+
+    /** the player found out how long a local file is */
+    fun rememberDuration(uri: String, sec: Double) {
+        if (sec <= 0 || item(uri) == null || durations[uri] == sec) return
+        durations[uri] = sec
+        persist()
+        Library.bump()
+    }
+
     fun init(ctx: Context) {
         context = ctx.applicationContext
         try {
@@ -53,12 +70,76 @@ object LocalMedia {
             val arr = o.getJSONArray("items")
             items = (0 until arr.length()).map {
                 val x = arr.getJSONObject(it)
+                val d = x.optDouble("dur", 0.0)
+                if (d > 0) durations[x.getString("uri")] = d
                 LocalItem(x.getString("cat"), x.getString("uri"), x.getString("name"), x.optString("folder"), x.optLong("size"))
             }
         } catch (e: Exception) {
             items = emptyList()
         }
         rebuild()
+        fillDurations() // files from an earlier scan that were not measured yet
+    }
+
+    /**
+     * Saving a playlist: give every local track a length, reading it from the file now when the
+     * background pass hasn't got to it yet (or couldn't read it then). The lengths are kept here too.
+     */
+    suspend fun withDurations(tracks: List<Track>): List<Track> = withContext(Dispatchers.IO) {
+        var measured = false
+        val out = tracks.map { t ->
+            val uri = t.localUri
+            if (uri == null || t.duration > 0) return@map t
+            var d = durations[uri] ?: 0.0
+            if (d <= 0) {
+                d = readDuration(uri)
+                if (d > 0) {
+                    durations[uri] = d
+                    measured = true
+                }
+            }
+            if (d > 0) t.copy(duration = d) else t
+        }
+        if (measured) persist()
+        out
+    }
+
+    /** Read the length of every local audio file that doesn't have one yet (background, a few ms per file). */
+    fun fillDurations() {
+        if (filling) return
+        filling = true
+        scope.launch {
+            try {
+                var n = 0
+                for (it in items) {
+                    if (it.isVideo || durations.containsKey(it.uri)) continue
+                    val d = readDuration(it.uri)
+                    durations[it.uri] = d // 0 = unreadable: don't try again until the next scan
+                    if (++n % 50 == 0) {
+                        persist()
+                        withContext(Dispatchers.Main) { Library.bump() }
+                    }
+                }
+                if (n > 0) {
+                    persist()
+                    withContext(Dispatchers.Main) { Library.bump() }
+                }
+            } finally {
+                filling = false
+            }
+        }
+    }
+
+    private fun readDuration(uri: String): Double {
+        val r = android.media.MediaMetadataRetriever()
+        return try {
+            r.setDataSource(context, Uri.parse(uri))
+            (r.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull() ?: 0L) / 1000.0
+        } catch (e: Exception) {
+            0.0
+        } finally {
+            try { r.release() } catch (e: Exception) { }
+        }
     }
 
     // ---------- folders ----------
@@ -117,9 +198,14 @@ object LocalMedia {
                 }
             }
             items = found
+            // keep known lengths of files that are still there; unreadable ones (0) get another try
+            val keep = found.map { it.uri }.toSet()
+            durations.keys.retainAll(keep)
+            durations.entries.removeAll { it.value <= 0.0 }
             lastScan = System.currentTimeMillis()
             persist()
             withContext(Dispatchers.Main) { rebuild() }
+            fillDurations()
             found.size
         } finally {
             scanning = false
@@ -162,10 +248,12 @@ object LocalMedia {
         }
     }
 
+    @Synchronized
     private fun persist() {
         val arr = JSONArray()
         items.forEach {
-            arr.put(JSONObject().put("cat", it.cat).put("uri", it.uri).put("name", it.name).put("folder", it.folder).put("size", it.size))
+            arr.put(JSONObject().put("cat", it.cat).put("uri", it.uri).put("name", it.name).put("folder", it.folder).put("size", it.size)
+                .put("dur", durations[it.uri] ?: 0.0))
         }
         try {
             file.writeText(JSONObject().put("at", lastScan).put("items", arr).toString())
@@ -224,7 +312,7 @@ object LocalMedia {
         title = it.title,
         artist = "",
         album = it.folder.substringAfterLast('/'),
-        duration = 0.0,
+        duration = duration(it.uri),
         format = it.name.substringAfterLast('.', ""),
         quality = "",
         deliverOrig = null,

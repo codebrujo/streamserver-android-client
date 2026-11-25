@@ -312,7 +312,8 @@ object Library {
 
     suspend fun savePlaylist(id: String, name: String, list: List<Track>, loop: Boolean) {
         if (LocalPlaylists.isLocal(id)) {
-            LocalPlaylists.update(id, name, loop, list)
+            // the lengths of local files are stored with the playlist
+            LocalPlaylists.update(id, name, loop, LocalMedia.withDurations(list))
             bump()
             return
         }

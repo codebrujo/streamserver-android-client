@@ -43,14 +43,19 @@ object LocalPlaylists {
     fun get(id: String): LocalPlaylist? = synchronized(this) { list.firstOrNull { it.id == id } }
 
     /** Tracks of a playlist; local files no longer found by the last scan are marked missing. */
-    fun tracks(id: String): List<Track>? = get(id)?.tracks?.map { t ->
-        val uri = t.localUri
-        if (uri != null && LocalMedia.item(uri) == null) t.copy(missing = true) else t
+    fun tracks(id: String): List<Track>? = get(id)?.tracks?.map { withLocalInfo(it) }
+
+    /** local files: missing if the last scan didn't find them; length from what the phone has measured */
+    private fun withLocalInfo(t: Track): Track {
+        val uri = t.localUri ?: return t
+        if (LocalMedia.item(uri) == null) return t.copy(missing = true)
+        val d = LocalMedia.duration(uri)
+        return if (t.duration <= 0 && d > 0) t.copy(duration = d) else t
     }
 
     fun infos(): List<PlaylistInfo> = synchronized(this) {
         list.map { p ->
-            PlaylistInfo(p.id, p.name, p.tracks.size, p.tracks.sumOf { it.duration }, p.tracks.firstOrNull()?.folder, local = true, loop = p.loop)
+            PlaylistInfo(p.id, p.name, p.tracks.size, p.tracks.sumOf { withLocalInfo(it).duration }, p.tracks.firstOrNull()?.folder, local = true, loop = p.loop)
         }
     }
 
